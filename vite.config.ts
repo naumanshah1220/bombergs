@@ -2,10 +2,12 @@ import { defineConfig } from 'vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { resolve } from 'node:path';
 
-// HTTPS in dev because phone motion sensors require a secure context,
-// and the phone reaches us via LAN IP (not localhost).
-export default defineConfig({
-  plugins: [basicSsl()],
+// Phone motion sensors require a secure context, and phones reach us via LAN
+// IP (not localhost) — so real-phone testing uses `npm run dev:phone` (HTTPS,
+// self-signed). Plain `npm run dev` stays HTTP for desktop/sim work, where
+// localhost already counts as secure.
+export default defineConfig(({ mode }) => ({
+  plugins: mode === 'phone' ? [basicSsl()] : [],
   server: { host: true, port: 5173 },
   build: {
     rollupOptions: {
@@ -15,4 +17,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
