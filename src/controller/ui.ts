@@ -104,7 +104,7 @@ export class ControllerUi {
       <div id="flat" style="position:absolute;top:24px;font-size:15px;color:#04121f;
         font-weight:700;visibility:hidden">📱 Lift your handlebar!</div>
       <div style="font-size:17px;color:#04121f;opacity:.7">${name}</div>
-      <div id="wheel" style="position:relative;width:260px;height:260px;will-change:transform">
+      <div id="wheel" style="position:relative;width:min(260px,56vmin);height:min(260px,56vmin);will-change:transform">
         <svg viewBox="0 0 100 100" style="width:100%;height:100%">
           <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(0,0,0,.35)" stroke-width="8"/>
           <line x1="50" y1="8" x2="50" y2="30" stroke="rgba(0,0,0,.35)" stroke-width="6" stroke-linecap="round"/>
@@ -114,17 +114,32 @@ export class ControllerUi {
           <circle cx="50" cy="12" r="5" fill="#04121f"/>
         </svg>
         <button id="act" style="position:absolute;inset:0;margin:auto;font-size:24px;
-          width:130px;height:130px;border-radius:50%;border:6px solid rgba(0,0,0,.25);
-          background:rgba(255,255,255,.88);color:#04121f;font-weight:800;touch-action:none">HONK</button>
+          width:50%;height:50%;border-radius:50%;border:6px solid rgba(0,0,0,.25);
+          background:rgba(255,255,255,.88);color:#04121f;font-weight:800;
+          pointer-events:none;transition:transform .08s">HONK</button>
       </div>
-      <div style="font-size:14px;color:#04121f;opacity:.55">tilt to steer</div>`);
+      <div style="font-size:14px;color:#04121f;opacity:.55">tilt to steer · tap anywhere to honk</div>`);
     this.wheel = this.root.querySelector('#wheel')!;
     this.flatNudge = this.root.querySelector('#flat')!;
-    const btn = this.root.querySelector<HTMLButtonElement>('#act')!;
-    const press = (down: boolean) => (e: Event) => { e.preventDefault(); this.handlers.onAction(down); };
-    btn.addEventListener('pointerdown', press(true));
-    btn.addEventListener('pointerup', press(false));
-    btn.addEventListener('pointercancel', press(false));
+    this.bindTapAnywhere(() => this.blip(340, 0.12));
+  }
+
+  /**
+   * The whole screen is the action button — one verb at a time means there's
+   * nothing to aim for. The visual button is pointer-events:none decoration.
+   */
+  private bindTapAnywhere(feedback?: () => void): void {
+    const state = this.root.firstElementChild as HTMLElement;
+    const btn = this.root.querySelector<HTMLElement>('#act');
+    const press = (down: boolean) => (e: Event) => {
+      e.preventDefault();
+      if (down) feedback?.();
+      if (btn) btn.style.transform = down ? 'scale(.9)' : 'scale(1)';
+      this.handlers.onAction(down);
+    };
+    state.addEventListener('pointerdown', press(true));
+    state.addEventListener('pointerup', press(false));
+    state.addEventListener('pointercancel', press(false));
   }
 
   /** Live updates inside the play state. */
@@ -138,11 +153,10 @@ export class ControllerUi {
       <div id="bombface" style="font-size:110px;transition:transform .1s">💣</div>
       <div style="font-size:24px;font-weight:800;color:#ff5a5f">YOU HAVE THE BOMB</div>
       <button id="act" style="font-size:26px;padding:20px 48px;border-radius:16px;
-        border:4px solid #ff5a5f;background:#2a0d10;color:#fff;font-weight:800">THROW</button>
-      <div style="font-size:15px;opacity:.6">get close to someone… then throw!</div>`);
-    const btn = this.root.querySelector<HTMLButtonElement>('#act')!;
-    btn.addEventListener('pointerdown', (e) => { e.preventDefault(); this.handlers.onAction(true); });
-    btn.addEventListener('pointerup', (e) => { e.preventDefault(); this.handlers.onAction(false); });
+        border:4px solid #ff5a5f;background:#2a0d10;color:#fff;font-weight:800;
+        pointer-events:none;transition:transform .08s">THROW</button>
+      <div style="font-size:15px;opacity:.6">get close to someone… tap anywhere to throw!</div>`);
+    this.bindTapAnywhere();
     this.wheel = undefined;
     this.flatNudge = undefined;
   }
