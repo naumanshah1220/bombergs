@@ -6,14 +6,14 @@ import QRCode from 'qrcode';
 import { PLAYER_COLORS, controllerUrl, type AbilityId } from '../shared/protocol';
 import { fuseFrac } from '../sim/bomb';
 import { TUNE, type Tunables } from '../sim/constants';
-import { makeWorld, step, type World } from '../sim/world';
+import { makeWorld, step, type StageRules, type World } from '../sim/world';
 import { Sfx } from './audio';
 import { Renderer } from './render';
 import { createRoom, type Room } from './net';
 
 const app = document.getElementById('app')!;
 let room: Room | undefined;
-let mode: 'lobby' | 'play' = 'lobby';
+let mode: 'lobby' | 'play' | 'practice' = 'lobby';
 let world: World | undefined;
 let renderer: Renderer | undefined;
 let sfx: Sfx | undefined;
@@ -80,9 +80,13 @@ async function renderLobby(): Promise<void> {
         <button id="start" style="margin-top:22px;font-size:22px;padding:14px 46px;
           border-radius:14px;border:none;background:#3DDC84;color:#04121f;
           font-weight:800;cursor:pointer">START (bots fill empty seats)</button>
+        <button id="practice" style="margin-top:12px;font-size:17px;padding:11px 34px;
+          border-radius:12px;border:2px solid #29B6F6;background:transparent;color:#29B6F6;
+          font-weight:700;cursor:pointer;display:block">🎯 PRACTICE — drive around, tune the controls</button>
       </div>
     </div>`;
   document.getElementById('start')!.addEventListener('click', startGame);
+  document.getElementById('practice')!.addEventListener('click', startPractice);
   const qrCanvas = document.getElementById('qr') as HTMLCanvasElement;
   await QRCode.toCanvas(qrCanvas, join, { width: 240, margin: 1, color: { dark: '#0b1026', light: '#eaf6ff' } });
   renderList();
@@ -90,9 +94,9 @@ async function renderLobby(): Promise<void> {
 
 const DUMMY_NAMES = ['Bot Bergy', 'Bot Floe', 'Bot Chilly'];
 
-/** ?tune=1 — live sliders over the mutable TUNE constants. */
-function mountTunePanel(): void {
-  if (new URLSearchParams(location.search).get('tune') !== '1') return;
+/** Live sliders over the mutable TUNE constants (?tune=1, or always in practice). */
+function mountTunePanel(force = false): void {
+  if (!force && new URLSearchParams(location.search).get('tune') !== '1') return;
   if (document.getElementById('tune')) return;
   const ranges: Record<keyof Tunables, [number, number]> = {
     BASE_SPEED: [60, 400],
@@ -100,7 +104,8 @@ function mountTunePanel(): void {
     TURN_RATE: [1, 8],
     ICE_GRIP: [1, 12],
     PENGUIN_RADIUS: [10, 40],
-    FLOE_RADIUS: [200, 560],
+    FLOE_RADIUS: [200, 600],
+    BOT_SPEED_MULT: [0.4, 1.2],
   };
   const wrap = document.createElement('div');
   wrap.id = 'tune';
@@ -165,6 +170,90 @@ function renderScorebar(): void {
     .join('');
 }
 
+/** Complexity ramps in: bumper rim first, deadly water at 3, breaking ice at 4. */
+function rulesForStage(n: number): StageRules {
+  return { edgeDeath: n >= 3, floeBreak: n >= 4 };
+}
+
+function stageAnnouncement(n: number): string {
+  if (n === 3) return `STAGE 3 — THE WATER WAKES UP 🌊<br/>
+    <span style="font-size:22px;opacity:.85">falling off the ice now ELIMINATES you!</span>`;
+  if (n === 4) return `STAGE 4 — THE ICE CRACKS 💥<br/>
+    <span style="font-size:22px;opacity:.85">explosions blow chunks off the floe!</span>`;
+  return `STAGE ${n}`;
+}
+
+/**
+ * Practice arena: no bomb, no eliminations, no stage end. Drive, bump the
+ * training bot, fall in and get fished back out — and tune the sliders.
+ */
+function startPractice(): void {
+  if (!room) return;
+  mode = 'practice';
+  sfx ??= new Sfx();
+  sfx.resume();
+  const humans = [...room.controllers.values()]
+    .filter((c) => c.connected)
+    .map((c) => ({ slot: c.slot, name: c.name, color: c.color }));
+  const botSlot = [...Array(8).keys()].find((i) => !humans.some((h) => h.slot === i)) ?? 7;
+  world = makeWorld(
+    [...humans, { slot: botSlot, name: 'Coach Berg', color: PLAYER_COLORS[botSlot] }],
+    Math.random,
+    { edgeDeath: true, floeBreak: false }, // splash allowed; we revive below
+  );
+  const coach = world.penguins.find((p) => p.slot === botSlot)!;
+  coach.isDummy = true;
+  app.innerHTML = `<canvas id="arena" style="width:100%;height:100%;display:block"></canvas>
+    <div id="banner" style="position:fixed;top:24px;left:0;right:0;text-align:center;
+      font-size:30px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);pointer-events:none">
+      🎯 PRACTICE ARENA</div>
+    <div style="position:fixed;bottom:18px;left:0;right:0;text-align:center;font-size:16px;
+      opacity:.75;pointer-events:none">no bombs · falling in just respawns you ·
+      tune sliders on the right · <b>L</b> = back to lobby</div>`;
+  renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement);
+  mountTunePanel(true);
+  room.broadcast({ t: 'phase', phase: 'play' });
+
+  let last = performance.now();
+  const loop = (now: number): void => {
+    if (mode !== 'practice' || !world || !renderer || !room) return;
+    const dt = Math.min(now - last, 50);
+    last = now;
+    for (const c of room.controllers.values()) {
+      const p = world.penguins.find((q) => q.slot === c.slot);
+      if (p && !p.isDummy) p.steer = c.steer;
+    }
+    const events = step(world, dt);
+    // no deaths here: anyone who splashes climbs right back on
+    renderer.addEvents(events.filter((e) => e.kind !== 'eliminated' && e.kind !== 'launched'), world);
+    for (const e of events) {
+      if (e.kind === 'splash') {
+        sfx?.splash();
+        const p = world.penguins.find((q) => q.slot === e.slot);
+        if (p) {
+          p.alive = true;
+          p.pos = { x: world.floe.cx, y: world.floe.cy };
+          p.vel = { x: 0, y: 0 };
+        }
+      }
+      if (e.kind === 'honk') sfx?.honk();
+      if (e.kind === 'bounce') sfx?.stick();
+    }
+    renderer.draw(world, dt);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 'l' && mode === 'practice') {
+    mode = 'lobby';
+    room?.broadcast({ t: 'phase', phase: 'lobby' });
+    document.getElementById('tune')?.remove();
+    void renderLobby();
+  }
+});
+
 /**
  * Between stages: everyone picks 1 of 3 abilities on their own phone.
  * 12 seconds, bots pick instantly, stragglers get a random one.
@@ -218,18 +307,23 @@ function finishDraft(): void {
 function startStage(): void {
   if (!room) return;
   stageNo++;
-  world = makeWorld(scores.map((s) => ({
-    slot: s.slot, name: s.name, color: s.color, isDummy: s.isBot, ability: s.ability,
-  })));
+  world = makeWorld(
+    scores.map((s) => ({
+      slot: s.slot, name: s.name, color: s.color, isDummy: s.isBot, ability: s.ability,
+    })),
+    Math.random,
+    rulesForStage(stageNo),
+  );
+  const isRuleStage = stageNo === 3 || stageNo === 4;
   app.innerHTML = `<canvas id="arena" style="width:100%;height:100%;display:block"></canvas>
     <div id="scorebar" style="position:fixed;top:14px;left:16px;font-size:15px;pointer-events:none"></div>
     <div id="banner" style="position:fixed;top:80px;left:0;right:0;text-align:center;
       font-size:40px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);
-      pointer-events:none">STAGE ${stageNo}</div>`;
+      pointer-events:none">${stageAnnouncement(stageNo)}</div>`;
   renderScorebar();
   renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement);
   room.broadcast({ t: 'phase', phase: 'play' });
-  setTimeout(() => { const b = document.getElementById('banner'); if (b) b.textContent = ''; }, 1600);
+  setTimeout(() => { const b = document.getElementById('banner'); if (b) b.textContent = ''; }, isRuleStage ? 3400 : 1600);
 
   let last = performance.now();
   let stageOver = false;
@@ -268,6 +362,7 @@ function startStage(): void {
         case 'blink': sfx?.blink(); break;
         case 'shieldUp': sfx?.shield(); break;
         case 'dash': sfx?.throwWhoosh(); break;
+        case 'bounce': sfx?.stick(); break;
       }
     }
 

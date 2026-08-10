@@ -5,7 +5,7 @@ import { abilityTick, useAbility } from './abilities';
 import { bombStep, carrierSlot, idleBomb, type BombState } from './bomb';
 import { botInputs } from './bots';
 import { ARENA_H, ARENA_W, FLOE_WOBBLE, TUNE } from './constants';
-import { contains, makeFloe, type Floe, type Vec2 } from './floe';
+import { contains, makeFloe, radiusAt, type Floe, type Vec2 } from './floe';
 import type { AbilityId } from '../shared/protocol';
 
 export type Penguin = {
@@ -36,16 +36,30 @@ export type WorldEvent =
   | { kind: 'blink'; slot: number; from: Vec2; to: Vec2 }
   | { kind: 'dash'; slot: number }
   | { kind: 'shieldUp'; slot: number }
-  | { kind: 'ricochet'; slot: number };          // shield bounced a landing bomb
+  | { kind: 'ricochet'; slot: number }           // shield bounced a landing bomb
+  | { kind: 'bounce'; slot: number; at: Vec2 };  // soft rim bump (early stages)
+
+/** Per-stage complexity dials — early stages are gentle, later ones cruel. */
+export type StageRules = {
+  edgeDeath: boolean; // false: the rim is a soft bumper; true: water eliminates
+  floeBreak: boolean; // do explosions carve the floe?
+};
+
+export const DEFAULT_RULES: StageRules = { edgeDeath: true, floeBreak: true };
 
 export type World = {
   penguins: Penguin[];
   floe: Floe;
   bomb: BombState;
+  rules: StageRules;
   tick: number;
 };
 
-export function makeWorld(players: { slot: number; name: string; color: string; isDummy?: boolean; ability?: AbilityId }[], rand: () => number = Math.random): World {
+export function makeWorld(
+  players: { slot: number; name: string; color: string; isDummy?: boolean; ability?: AbilityId }[],
+  rand: () => number = Math.random,
+  rules: StageRules = DEFAULT_RULES,
+): World {
   const floe = makeFloe(ARENA_W / 2, ARENA_H / 2, TUNE.FLOE_RADIUS, FLOE_WOBBLE, rand);
   const penguins = players.map((p, i) => {
     const angle = (i / players.length) * Math.PI * 2;
@@ -66,7 +80,7 @@ export function makeWorld(players: { slot: number; name: string; color: string; 
       shieldMs: 0,
     };
   });
-  return { penguins, floe, bomb: idleBomb(), tick: 0 };
+  return { penguins, floe, bomb: idleBomb(), rules, tick: 0 };
 }
 
 export function step(w: World, dtMs: number): WorldEvent[] {
@@ -119,13 +133,31 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     }
   }
 
-  // Water check — off the floe means in the drink.
+  // Rim check — deadly water in late stages, a soft bumper before that.
   for (const p of w.penguins) {
     if (!p.alive) continue;
     if (!contains(w.floe, p.pos)) {
-      p.alive = false;
-      events.push({ kind: 'splash', slot: p.slot, at: { ...p.pos } });
-      events.push({ kind: 'eliminated', slot: p.slot });
+      if (w.rules.edgeDeath) {
+        p.alive = false;
+        events.push({ kind: 'splash', slot: p.slot, at: { ...p.pos } });
+        events.push({ kind: 'eliminated', slot: p.slot });
+      } else {
+        // push back inside and reflect the outward velocity component
+        const dx = p.pos.x - w.floe.cx;
+        const dy = p.pos.y - w.floe.cy;
+        const dist = Math.hypot(dx, dy) || 0.001;
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const rim = radiusAt(w.floe, Math.atan2(dy, dx)) - 4;
+        p.pos.x = w.floe.cx + nx * rim;
+        p.pos.y = w.floe.cy + ny * rim;
+        const vOut = p.vel.x * nx + p.vel.y * ny;
+        if (vOut > 0) {
+          p.vel.x -= vOut * 1.5 * nx; // reflect half of it back inward
+          p.vel.y -= vOut * 1.5 * ny;
+          if (vOut > 60) events.push({ kind: 'bounce', slot: p.slot, at: { ...p.pos } });
+        }
+      }
     }
   }
 

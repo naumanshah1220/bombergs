@@ -1,12 +1,12 @@
-// Arena renderer: everything procedural on Canvas 2D. Press P to toggle retro
-// mode — the same scene rendered at low resolution and upscaled with
+﻿// Arena renderer: everything procedural on Canvas 2D. Press P to toggle retro
+// mode â€” the same scene rendered at low resolution and upscaled with
 // smoothing off, i.e. free pixel art.
 //
-// Scene layers, back to front: night sky (stars, moon) → aurora curtains →
-// distant icebergs + the Arctic Mart neon → water (waves, aurora shimmer) →
-// floe (submerged rim, foam ring, surface, speckle texture) → splashes and
-// bobbing ice cubes → penguins (shadow, trolley, bird, scarf) with snow spray
-// and motion trails → vignette.
+// Scene layers, back to front: night sky (stars, moon) â†’ aurora curtains â†’
+// distant icebergs + the Arctic Mart neon â†’ water (waves, aurora shimmer) â†’
+// floe (submerged rim, foam ring, surface, speckle texture) â†’ splashes and
+// bobbing ice cubes â†’ penguins (shadow, trolley, bird, scarf) with snow spray
+// and motion trails â†’ vignette.
 
 import { BOMB, fuseFrac } from '../sim/bomb';
 import { ARENA_H, ARENA_W, TUNE } from '../sim/constants';
@@ -86,6 +86,12 @@ export class Renderer {
           });
         }
       }
+      if (e.kind === 'bounce') {
+        for (let i = 0; i < 6; i++) {
+          const a = Math.random() * Math.PI * 2;
+          this.spray.push({ x: e.at.x, y: e.at.y, vx: Math.cos(a) * 110, vy: Math.sin(a) * 110, age: 0 });
+        }
+      }
       if (e.kind === 'blink') {
         for (const spot of [e.from, e.to]) {
           for (let i = 0; i < 10; i++) {
@@ -116,7 +122,7 @@ export class Renderer {
     this.canvas.width = this.canvas.clientWidth;
     this.canvas.height = this.canvas.clientHeight;
 
-    this.ctx.fillStyle = '#070a20';
+    this.ctx.fillStyle = '#052430'; // letterbox = same deep water as the scene edge
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     const target = this.retro ? this.lowCtx : this.ctx;
@@ -159,8 +165,6 @@ export class Renderer {
   }
 
   private scene(c: CanvasRenderingContext2D, w: World, dtMs: number): void {
-    this.sky(c);
-    this.horizon(c);
     this.water(c);
     this.floe(c, w.floe);
     this.updateSplashes(c, dtMs);
@@ -217,7 +221,7 @@ export class Renderer {
       const x = b.from.x + (b.to.x - b.from.x) * b.t01;
       const y = b.from.y + (b.to.y - b.from.y) * b.t01;
       const h = Math.sin(Math.PI * Math.min(b.t01, 1)) * 130;
-      // landing reticle — the dodge telegraph
+      // landing reticle â€” the dodge telegraph
       c.save();
       c.setLineDash([8, 8]);
       c.lineWidth = 4;
@@ -328,137 +332,65 @@ export class Renderer {
     this.shockwaves = this.shockwaves.filter((s) => s.age < 0.6);
   }
 
-  private sky(c: CanvasRenderingContext2D): void {
-    const g = c.createLinearGradient(0, 0, 0, ARENA_H * 0.45);
-    g.addColorStop(0, '#060822');
-    g.addColorStop(0.7, '#101c48');
-    g.addColorStop(1, '#233a68');
+  /**
+   * Full top-down ocean: deep water fills the whole frame, and the aurora
+   * exists only as drifting color washes reflected on the surface. No sky,
+   * no horizon — we are looking straight down at a floe at night.
+   */
+  private water(c: CanvasRenderingContext2D): void {
+    const g = c.createRadialGradient(
+      ARENA_W / 2, ARENA_H / 2, ARENA_H * 0.25,
+      ARENA_W / 2, ARENA_H / 2, ARENA_W * 0.62,
+    );
+    g.addColorStop(0, '#0f4d60');
+    g.addColorStop(0.6, '#0a3a4d');
+    g.addColorStop(1, '#052430');
     c.fillStyle = g;
-    c.fillRect(0, 0, ARENA_W, ARENA_H * 0.45);
+    c.fillRect(0, 0, ARENA_W, ARENA_H);
 
-    for (const s of this.stars) {
-      c.globalAlpha = 0.35 + 0.55 * Math.abs(Math.sin(this.t * 0.8 + s.tw));
-      c.fillStyle = '#dceaff';
-      c.fillRect(s.x, s.y, s.r, s.r);
-    }
-    c.globalAlpha = 1;
-
-    // moon with halo
-    c.save();
-    c.shadowColor = '#cfe4ff';
-    c.shadowBlur = 40;
-    c.fillStyle = '#e8f2ff';
-    c.beginPath();
-    c.arc(ARENA_W * 0.84, ARENA_H * 0.10, 34, 0, Math.PI * 2);
-    c.fill();
-    c.shadowBlur = 0;
-    c.fillStyle = 'rgba(180, 200, 230, .35)';
-    c.beginPath();
-    c.arc(ARENA_W * 0.845, ARENA_H * 0.094, 7, 0, Math.PI * 2);
-    c.arc(ARENA_W * 0.833, ARENA_H * 0.112, 5, 0, Math.PI * 2);
-    c.fill();
-    c.restore();
-
-    // aurora: layered drifting ribbons with soft vertical curtains
+    // aurora reflections: big soft color washes sliding over the water
     c.save();
     c.globalCompositeOperation = 'lighter';
-    const ribbons = [
-      { hue: 140, speed: 0.25, base: 120, amp: 40, alpha: 0.11 },
-      { hue: 170, speed: 0.15, base: 190, amp: 55, alpha: 0.07 },
-      { hue: 285, speed: 0.20, base: 240, amp: 48, alpha: 0.07 },
-      { hue: 320, speed: 0.31, base: 80, amp: 30, alpha: 0.06 },
+    const washes = [
+      { hue: 150, cx: 0.25, cy: 0.2, r: 500, speed: 0.11, alpha: 0.05 },
+      { hue: 285, cx: 0.78, cy: 0.3, r: 560, speed: 0.07, alpha: 0.045 },
+      { hue: 175, cx: 0.5, cy: 0.85, r: 520, speed: 0.09, alpha: 0.04 },
+      { hue: 320, cx: 0.12, cy: 0.75, r: 430, speed: 0.13, alpha: 0.035 },
     ];
-    for (const r of ribbons) {
-      c.beginPath();
-      for (let x = 0; x <= ARENA_W; x += 24) {
-        const y = r.base
-          + Math.sin(x * 0.005 + this.t * r.speed * 2) * r.amp
-          + Math.sin(x * 0.013 - this.t * r.speed) * r.amp * 0.4;
-        x === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
-      }
-      c.lineWidth = 70;
-      c.lineCap = 'round';
-      c.strokeStyle = `hsla(${r.hue}, 90%, 65%, ${r.alpha})`;
-      c.stroke();
-      c.lineWidth = 26;
-      c.strokeStyle = `hsla(${r.hue}, 95%, 78%, ${r.alpha * 1.5})`;
-      c.stroke();
-      // curtains: faint vertical streamers hanging from the ribbon
-      for (let x = 60; x < ARENA_W; x += 170) {
-        const y = r.base + Math.sin(x * 0.005 + this.t * r.speed * 2) * r.amp;
-        const h = 90 + Math.sin(this.t * 0.9 + x) * 35;
-        const grad = c.createLinearGradient(0, y, 0, y + h);
-        grad.addColorStop(0, `hsla(${r.hue}, 90%, 70%, ${r.alpha * 1.2})`);
-        grad.addColorStop(1, 'transparent');
-        c.fillStyle = grad;
-        c.fillRect(x - 14, y, 28, h);
-      }
+    for (const wsh of washes) {
+      const x = wsh.cx * ARENA_W + Math.sin(this.t * wsh.speed * 2) * 130;
+      const y = wsh.cy * ARENA_H + Math.cos(this.t * wsh.speed * 1.4) * 90;
+      const grad = c.createRadialGradient(x, y, 0, x, y, wsh.r);
+      grad.addColorStop(0, `hsla(${wsh.hue}, 90%, 65%, ${wsh.alpha})`);
+      grad.addColorStop(1, 'transparent');
+      c.fillStyle = grad;
+      c.fillRect(x - wsh.r, y - wsh.r, wsh.r * 2, wsh.r * 2);
     }
     c.restore();
-  }
 
-  private horizon(c: CanvasRenderingContext2D): void {
-    // distant icebergs on the waterline
-    const bergs = [
-      { x: 140, w: 260, h: 90 }, { x: 520, w: 180, h: 58 },
-      { x: 1450, w: 300, h: 105 }, { x: 1130, w: 150, h: 44 },
-    ];
-    const yBase = ARENA_H * 0.44;
-    for (const b of bergs) {
-      c.beginPath();
-      c.moveTo(b.x, yBase);
-      c.lineTo(b.x + b.w * 0.22, yBase - b.h);
-      c.lineTo(b.x + b.w * 0.48, yBase - b.h * 0.55);
-      c.lineTo(b.x + b.w * 0.7, yBase - b.h * 0.9);
-      c.lineTo(b.x + b.w, yBase);
-      c.closePath();
-      c.fillStyle = '#2c4468';
-      c.fill();
-    }
-    // the Arctic Mart — where the trolleys came from
-    const sx = 1490;
-    const sy = yBase - 108;
-    c.fillStyle = '#22344f';
-    c.fillRect(sx, sy + 46, 150, 62);
+    // gentle wave strokes drifting across the whole surface
     c.save();
-    c.shadowColor = '#ff5ad0';
-    c.shadowBlur = 18;
-    c.fillStyle = '#ff8adf';
-    c.font = 'bold 26px "Segoe UI", sans-serif';
-    c.textAlign = 'center';
-    const flicker = Math.sin(this.t * 11) > -0.92 ? 1 : 0.35; // neon stutter
-    c.globalAlpha = flicker;
-    c.fillText('ARCTIC MART', sx + 75, sy + 36);
-    c.globalAlpha = flicker * 0.85;
-    c.font = 'bold 13px "Segoe UI", sans-serif';
-    c.fillText('OPEN 24/7', sx + 75, sy + 76);
-    c.restore();
-  }
-
-  private water(c: CanvasRenderingContext2D): void {
-    const g = c.createLinearGradient(0, ARENA_H * 0.42, 0, ARENA_H);
-    g.addColorStop(0, '#11576b');
-    g.addColorStop(0.5, '#0b3f52');
-    g.addColorStop(1, '#062836');
-    c.fillStyle = g;
-    c.fillRect(0, ARENA_H * 0.42, ARENA_W, ARENA_H * 0.58);
-
-    // drifting wave strokes + aurora reflection shimmer
-    c.save();
-    for (let i = 0; i < 14; i++) {
-      const y = ARENA_H * 0.46 + i * 52;
-      const drift = Math.sin(this.t * 0.5 + i * 1.7) * 30;
-      c.globalAlpha = 0.05 + (i % 3) * 0.015;
+    for (let i = 0; i < 16; i++) {
+      const y = (i / 16) * ARENA_H + Math.sin(this.t * 0.5 + i * 1.7) * 14;
+      c.globalAlpha = 0.045 + (i % 3) * 0.012;
       c.strokeStyle = i % 4 === 0 ? '#7dffb2' : i % 4 === 2 ? '#d98cff' : '#bfe9ff';
-      c.lineWidth = 2.5;
+      c.lineWidth = 2.2;
       c.beginPath();
-      for (let x = -40; x <= ARENA_W + 40; x += 60) {
-        const wy = y + Math.sin(x * 0.02 + this.t * 1.2 + i) * 4;
-        x === -40 ? c.moveTo(x + drift, wy) : c.lineTo(x + drift, wy);
+      for (let x = -60; x <= ARENA_W + 60; x += 64) {
+        const wy = y + Math.sin(x * 0.014 + this.t * 1.1 + i * 2) * 6;
+        x === -60 ? c.moveTo(x, wy) : c.lineTo(x, wy);
       }
       c.stroke();
     }
     c.restore();
+
+    // star glints twinkling on the water
+    for (const s of this.stars) {
+      c.globalAlpha = 0.12 + 0.2 * Math.abs(Math.sin(this.t * 0.8 + s.tw));
+      c.fillStyle = '#dceaff';
+      c.fillRect(s.x, (s.y * 3.2) % ARENA_H, s.r, s.r);
+    }
+    c.globalAlpha = 1;
   }
 
   private floePath(c: CanvasRenderingContext2D, f: Floe, inset: number, wobblePhase = 0): void {
@@ -552,7 +484,7 @@ export class Renderer {
     this.splashes = this.splashes.filter((s) => s.age < 1.1);
   }
 
-  /** Eliminated penguins bob past frozen in an ice cube — the spec's promise. */
+  /** Eliminated penguins bob past frozen in an ice cube â€” the spec's promise. */
   private updateCubes(c: CanvasRenderingContext2D): void {
     for (const cube of this.cubes) {
       const age = this.t - cube.born;

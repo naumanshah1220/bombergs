@@ -98,9 +98,12 @@ export function bombStep(w: World, dtMs: number, rand: () => number = Math.rando
   const b = w.bomb;
   const alive = w.penguins.filter((p) => p.alive);
 
-  // carrier speed boost bookkeeping
+  // carrier speed boost bookkeeping (bots run handicapped — humans first)
   const carrier = carrierSlot(w.bomb);
-  for (const p of w.penguins) p.speedMult = p.slot === carrier ? TUNE.CARRIER_SPEED_MULT : 1;
+  for (const p of w.penguins) {
+    p.speedMult = (p.slot === carrier ? TUNE.CARRIER_SPEED_MULT : 1)
+      * (p.isDummy ? TUNE.BOT_SPEED_MULT : 1);
+  }
 
   switch (b.s) {
     case 'idle': {
@@ -219,7 +222,7 @@ export function bombStep(w: World, dtMs: number, rand: () => number = Math.rando
 
 function explode(w: World, at: Vec2, events: WorldEvent[]): void {
   events.push({ kind: 'explode', at });
-  breakChunk(w.floe, at, BOMB.BLAST_RADIUS * 0.9);
+  if (w.rules.floeBreak) breakChunk(w.floe, at, BOMB.BLAST_RADIUS * 0.9);
   for (const p of w.penguins) {
     if (!p.alive) continue;
     if (Math.hypot(p.pos.x - at.x, p.pos.y - at.y) <= BOMB.BLAST_RADIUS) {
