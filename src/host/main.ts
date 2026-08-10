@@ -3,11 +3,16 @@
 // flashes — the place where controller feel gets tuned before the game exists.
 
 import QRCode from 'qrcode';
-import { controllerUrl } from '../shared/protocol';
+import { PLAYER_COLORS, controllerUrl } from '../shared/protocol';
+import { makeWorld, step, type World } from '../sim/world';
+import { Renderer } from './render';
 import { createRoom, type Room } from './net';
 
 const app = document.getElementById('app')!;
 let room: Room | undefined;
+let mode: 'lobby' | 'play' = 'lobby';
+let world: World | undefined;
+let renderer: Renderer | undefined;
 
 function boot(): void {
   app.innerHTML = `<div style="display:grid;place-items:center;height:100%">
@@ -40,7 +45,7 @@ function joinOrigin(): string {
 }
 
 async function renderLobby(): Promise<void> {
-  if (!room) return;
+  if (!room || mode !== 'lobby') return;
   const join = controllerUrl(joinOrigin(), room.code);
   const insecure = location.protocol === 'http:';
   app.innerHTML = `
@@ -59,11 +64,79 @@ async function renderLobby(): Promise<void> {
       <div style="min-width:420px">
         <div style="font-size:20px;opacity:.7;margin-bottom:14px">PENGUINS</div>
         <div id="plist" style="display:flex;flex-direction:column;gap:12px"></div>
+        <button id="start" style="margin-top:22px;font-size:22px;padding:14px 46px;
+          border-radius:14px;border:none;background:#3DDC84;color:#04121f;
+          font-weight:800;cursor:pointer">START (bots fill empty seats)</button>
       </div>
     </div>`;
+  document.getElementById('start')!.addEventListener('click', startGame);
   const qrCanvas = document.getElementById('qr') as HTMLCanvasElement;
   await QRCode.toCanvas(qrCanvas, join, { width: 240, margin: 1, color: { dark: '#0b1026', light: '#eaf6ff' } });
   renderList();
+}
+
+const DUMMY_NAMES = ['Bot Bergy', 'Bot Floe', 'Bot Chilly'];
+
+function startGame(): void {
+  if (!room) return;
+  mode = 'play';
+  const players = [...room.controllers.values()]
+    .filter((c) => c.connected)
+    .map((c) => ({ slot: c.slot, name: c.name, color: c.color }));
+  // fill to 4 with circling dummies (real bots arrive with the bomb loop)
+  const dummies: { slot: number; name: string; color: string; isDummy: boolean }[] = [];
+  const taken = new Set(players.map((p) => p.slot));
+  for (let i = 0; players.length + dummies.length < 4 && i < PLAYER_COLORS.length; i++) {
+    if (taken.has(i)) continue;
+    dummies.push({ slot: i, name: DUMMY_NAMES[dummies.length] ?? `Bot ${i}`, color: PLAYER_COLORS[i], isDummy: true });
+  }
+  world = makeWorld([...players, ...dummies]);
+  app.innerHTML = `<canvas id="arena" style="width:100%;height:100%;display:block"></canvas>
+    <div id="banner" style="position:fixed;top:30px;left:0;right:0;text-align:center;
+      font-size:40px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);
+      pointer-events:none">GO!</div>`;
+  renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement);
+  room.broadcast({ t: 'phase', phase: 'play' });
+  setTimeout(() => { const b = document.getElementById('banner'); if (b) b.textContent = ''; }, 1200);
+
+  let last = performance.now();
+  let stageOver = false;
+  const loop = (now: number): void => {
+    if (mode !== 'play' || !world || !renderer || !room) return;
+    const dt = Math.min(now - last, 50);
+    last = now;
+    for (const c of room.controllers.values()) {
+      const p = world.penguins.find((q) => q.slot === c.slot);
+      if (p && !p.isDummy) p.steer = c.steer;
+    }
+    const events = step(world, dt);
+    renderer.addEvents(events);
+    for (const e of events) {
+      if (e.kind === 'eliminated') {
+        const placement = world.penguins.filter((q) => q.alive).length + 1;
+        room.sendTo(e.slot, { t: 'status', alive: false, placement, score: 0 });
+      }
+    }
+    const alive = world.penguins.filter((q) => q.alive);
+    if (alive.length <= 1 && !stageOver) {
+      stageOver = true;
+      const b = document.getElementById('banner');
+      if (b && alive[0]) {
+        b.innerHTML = `${alive[0].name} WINS THE STAGE! 🏆<br/>
+          <span style="font-size:20px;opacity:.8">press R to run it back</span>`;
+        room.sendTo(alive[0].slot, { t: 'status', alive: false, placement: 1, score: 1 });
+      }
+    }
+    renderer.draw(world, dt);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+  window.addEventListener('keydown', function restart(e) {
+    if (e.key.toLowerCase() === 'r' && mode === 'play') {
+      window.removeEventListener('keydown', restart);
+      startGame();
+    }
+  });
 }
 
 function renderList(): void {
