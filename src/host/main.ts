@@ -27,9 +27,22 @@ function boot(): void {
   );
 }
 
+/**
+ * Origin phones should join through. Opened via localhost in dev? Swap in the
+ * machine's LAN IP (injected at build time) so scanning the QR actually works.
+ */
+function joinOrigin(): string {
+  const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (local && typeof __LAN_HOST__ === 'string' && __LAN_HOST__) {
+    return `${location.protocol}//${__LAN_HOST__}:${location.port}`;
+  }
+  return location.origin;
+}
+
 async function renderLobby(): Promise<void> {
   if (!room) return;
-  const join = controllerUrl(location.origin, room.code);
+  const join = controllerUrl(joinOrigin(), room.code);
+  const insecure = location.protocol === 'http:';
   app.innerHTML = `
     <div style="display:flex;height:100%;align-items:center;justify-content:center;gap:70px;padding:40px">
       <div style="text-align:center">
@@ -38,6 +51,10 @@ async function renderLobby(): Promise<void> {
         <canvas id="qr" style="border-radius:16px"></canvas>
         <div style="font-size:44px;font-weight:800;letter-spacing:14px;margin-top:18px">${room.code}</div>
         <div style="opacity:.5;font-size:14px;margin-top:6px">${join}</div>
+        ${insecure ? `<div style="margin-top:14px;padding:10px 16px;border-radius:10px;
+            background:#3a2a10;color:#ffb400;font-size:14px;max-width:340px">
+            ⚠️ HTTP mode: phone tilt sensors won't work.<br/>
+            Run <b>npm run dev:phone</b> for HTTPS.</div>` : ''}
       </div>
       <div style="min-width:420px">
         <div style="font-size:20px;opacity:.7;margin-bottom:14px">PENGUINS</div>
