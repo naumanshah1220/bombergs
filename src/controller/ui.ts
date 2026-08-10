@@ -97,9 +97,12 @@ export class ControllerUi {
     });
   }
 
-  showPlay(name: string): void {
+  showPlay(name: string, ability?: AbilityId): void {
     // The wheel is the feedback: it rotates exactly as much as the game
     // thinks you're steering, so grip direction is self-teaching.
+    const a = ability ? ABILITY_INFO[ability] : undefined;
+    const btnLabel = a ? `${a.icon}<div style="font-size:14px">${a.name.toUpperCase()}</div>` : 'HONK';
+    const hint = a ? `tilt to steer · tap anywhere for ${a.name}` : 'tilt to steer · tap anywhere to honk';
     this.base(this.color, `
       <div id="flat" style="position:absolute;top:24px;font-size:15px;color:#04121f;
         font-weight:700;visibility:hidden">📱 Lift your handlebar!</div>
@@ -116,9 +119,9 @@ export class ControllerUi {
         <button id="act" style="position:absolute;inset:0;margin:auto;font-size:24px;
           width:50%;height:50%;border-radius:50%;border:6px solid rgba(0,0,0,.25);
           background:rgba(255,255,255,.88);color:#04121f;font-weight:800;
-          pointer-events:none;transition:transform .08s">HONK</button>
+          pointer-events:none;transition:transform .08s">${btnLabel}</button>
       </div>
-      <div style="font-size:14px;color:#04121f;opacity:.55">tilt to steer · tap anywhere to honk</div>`);
+      <div style="font-size:14px;color:#04121f;opacity:.55">${hint}</div>`);
     this.wheel = this.root.querySelector('#wheel')!;
     this.flatNudge = this.root.querySelector('#flat')!;
     this.bindTapAnywhere(() => this.blip(340, 0.12));

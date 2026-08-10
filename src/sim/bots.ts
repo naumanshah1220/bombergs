@@ -36,12 +36,14 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean }
     return { steer: wander(w, p), tap: false };
   }
 
-  // incoming throw at me? dodge perpendicular to the arc
+  const abilityReady = p.ability !== undefined && p.ability.cooldownMs <= 0;
+
+  // incoming throw at me? dodge — shield/blink/dash if we have one ready
   if (w.bomb.s === 'flying') {
     const d = Math.hypot(w.bomb.to.x - p.pos.x, w.bomb.to.y - p.pos.y);
     if (d < BOMB.STICK_RADIUS * 3) {
       const away = Math.atan2(p.pos.y - w.bomb.to.y, p.pos.x - w.bomb.to.x);
-      return { steer: turnToward(p.heading, away), tap: false };
+      return { steer: turnToward(p.heading, away), tap: abilityReady && w.bomb.t01 > 0.35 };
     }
   }
 
@@ -54,14 +56,15 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean }
     }
   }
 
-  // flee a nearby carrier
+  // flee a nearby carrier — panic-button an escape ability when cornered
   if (carrier !== undefined) {
     const hunter = w.penguins.find((q) => q.slot === carrier);
     if (hunter?.alive) {
       const d = Math.hypot(hunter.pos.x - p.pos.x, hunter.pos.y - p.pos.y);
       if (d < 320) {
         const away = Math.atan2(p.pos.y - hunter.pos.y, p.pos.x - hunter.pos.x);
-        return { steer: turnToward(p.heading, away), tap: false };
+        const cornered = d < 160 && (p.ability?.id === 'blink' || p.ability?.id === 'dash' || p.ability?.id === 'shield');
+        return { steer: turnToward(p.heading, away), tap: abilityReady && cornered };
       }
     }
   }

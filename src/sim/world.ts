@@ -1,10 +1,12 @@
 // Authoritative world state + step(). Pure logic: no DOM, no network, no
 // rendering. The host calls step() at 60Hz and forwards the returned events.
 
-import { bombStep, idleBomb, type BombState } from './bomb';
+import { abilityTick, useAbility } from './abilities';
+import { bombStep, carrierSlot, idleBomb, type BombState } from './bomb';
 import { botInputs } from './bots';
 import { ARENA_H, ARENA_W, FLOE_WOBBLE, TUNE } from './constants';
 import { contains, makeFloe, type Floe, type Vec2 } from './floe';
+import type { AbilityId } from '../shared/protocol';
 
 export type Penguin = {
   slot: number;
@@ -14,10 +16,12 @@ export type Penguin = {
   heading: number;   // radians, 0 = +x
   vel: Vec2;
   steer: number;     // [-1, 1] latest input
-  tap: boolean;      // consumed by the bomb machine each step
+  tap: boolean;      // consumed by abilities / the bomb machine each step
   speedMult: number;
   alive: boolean;
   isDummy: boolean;  // bot-driven
+  ability?: { id: AbilityId; cooldownMs: number };
+  shieldMs: number;  // >0 = ice shield up
 };
 
 export type WorldEvent =
@@ -28,7 +32,11 @@ export type WorldEvent =
   | { kind: 'throw'; slot: number }
   | { kind: 'honk'; slot: number }        // tap with nothing to do
   | { kind: 'explode'; at: Vec2 }
-  | { kind: 'launched'; slot: number; at: Vec2 }; // blasted skyward
+  | { kind: 'launched'; slot: number; at: Vec2 } // blasted skyward
+  | { kind: 'blink'; slot: number; from: Vec2; to: Vec2 }
+  | { kind: 'dash'; slot: number }
+  | { kind: 'shieldUp'; slot: number }
+  | { kind: 'ricochet'; slot: number };          // shield bounced a landing bomb
 
 export type World = {
   penguins: Penguin[];
@@ -37,7 +45,7 @@ export type World = {
   tick: number;
 };
 
-export function makeWorld(players: { slot: number; name: string; color: string; isDummy?: boolean }[], rand: () => number = Math.random): World {
+export function makeWorld(players: { slot: number; name: string; color: string; isDummy?: boolean; ability?: AbilityId }[], rand: () => number = Math.random): World {
   const floe = makeFloe(ARENA_W / 2, ARENA_H / 2, TUNE.FLOE_RADIUS, FLOE_WOBBLE, rand);
   const penguins = players.map((p, i) => {
     const angle = (i / players.length) * Math.PI * 2;
@@ -54,6 +62,8 @@ export function makeWorld(players: { slot: number; name: string; color: string; 
       speedMult: 1,
       alive: true,
       isDummy: p.isDummy ?? false,
+      ability: p.ability ? { id: p.ability, cooldownMs: 0 } : undefined,
+      shieldMs: 0,
     };
   });
   return { penguins, floe, bomb: idleBomb(), tick: 0 };
@@ -116,6 +126,18 @@ export function step(w: World, dtMs: number): WorldEvent[] {
       p.alive = false;
       events.push({ kind: 'splash', slot: p.slot, at: { ...p.pos } });
       events.push({ kind: 'eliminated', slot: p.slot });
+    }
+  }
+
+  // Non-carrier taps fire drafted abilities; the carrier's tap belongs to
+  // the bomb machine (throw). Abilities resolve before the bomb so a blink
+  // can dodge a landing on the same frame it was tapped.
+  abilityTick(w, dtMs);
+  const carrier = carrierSlot(w.bomb);
+  for (const p of w.penguins) {
+    if (p.tap && p.alive && p.slot !== carrier && p.ability) {
+      const used = useAbility(w, p);
+      if (used.length) { events.push(...used); p.tap = false; }
     }
   }
 

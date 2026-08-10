@@ -2,7 +2,7 @@
 // state the host tells us to be in.
 
 import Peer, { type DataConnection } from 'peerjs';
-import { hostPeerId, type C2H, type H2C } from '../shared/protocol';
+import { hostPeerId, type AbilityId, type C2H, type H2C } from '../shared/protocol';
 import { FLAT_LIMIT, flatness, makeSteer, rollFromGravity } from '../shared/steer';
 import { requestMotionPermission, startRealSensors, startSimSensors, type SensorSource } from './sensors';
 import { ControllerUi } from './ui';
@@ -19,6 +19,8 @@ let tapHeld = false;
 let tapQueued = false; // edge-trigger: guarantees short taps reach the host
 let playerName = 'Penguin';
 let carrying = false;
+let lastOffer: AbilityId[] = [];
+let myAbility: AbilityId | undefined;
 
 const ui = new ControllerUi(app, {
   onJoin(name) {
@@ -40,13 +42,14 @@ const ui = new ControllerUi(app, {
     // settle 400ms, then capture neutral grip
     await new Promise((r) => setTimeout(r, 400));
     steerFn = makeSteer(rollFromGravity(sensors!.gravity()));
-    ui.showPlay(playerName);
+    ui.showPlay(playerName, myAbility);
   },
   onAction(pressed) {
     if (pressed && !tapHeld) tapQueued = true;
     tapHeld = pressed;
   },
   onDraftPick(index) {
+    myAbility = lastOffer[index];
     send({ t: 'draftPick', index });
     ui.showWaiting('Ability locked in — next stage soon!');
   },
@@ -77,18 +80,19 @@ function handleHostMessage(msg: H2C): void {
     case 'phase':
       if (msg.phase === 'calibrate') ui.showCalibrate(simMode);
       // New stage: anyone calibrated returns to the wheel (revives the dead)
-      if (msg.phase === 'play' && steerFn) { carrying = false; ui.stopFuse(); ui.showPlay(playerName); }
+      if (msg.phase === 'play' && steerFn) { carrying = false; ui.stopFuse(); ui.showPlay(playerName, myAbility); }
       if (msg.phase === 'play' && !steerFn) ui.showCalibrate(simMode);
       if (msg.phase === 'gameover') ui.showWaiting('Match over! Check the big screen 🏆');
       if (msg.phase === 'lobby') ui.showWaiting('Back in the lobby — next match soon!');
       break;
     case 'bomb':
       if (msg.carrying && !carrying) ui.showBomb();
-      if (!msg.carrying && carrying) { ui.stopFuse(); ui.showPlay(playerName); }
+      if (!msg.carrying && carrying) { ui.stopFuse(); ui.showPlay(playerName, myAbility); }
       carrying = msg.carrying;
       if (carrying) ui.setFuse(msg.fuseFrac);
       break;
     case 'draftOffer':
+      lastOffer = msg.options;
       ui.showDraft(msg.options);
       break;
     case 'status':

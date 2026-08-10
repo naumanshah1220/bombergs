@@ -81,11 +81,12 @@ export function tryThrow(w: World): boolean {
   return true;
 }
 
-function nearestTarget(w: World, me: Penguin, excludeSlot: number | undefined, range: number): Penguin | undefined {
+function nearestTarget(w: World, me: Penguin, excludeSlot: number | undefined, range: number, skipShielded = false): Penguin | undefined {
   let best: Penguin | undefined;
   let bestD = range;
   for (const p of w.penguins) {
     if (!p.alive || p.slot === me.slot || p.slot === excludeSlot) continue;
+    if (skipShielded && p.shieldMs > 0) continue;
     const d = Math.hypot(p.pos.x - me.pos.x, p.pos.y - me.pos.y);
     if (d < bestD) { bestD = d; best = p; }
   }
@@ -137,9 +138,10 @@ export function bombStep(w: World, dtMs: number, rand: () => number = Math.rando
         else events.push({ kind: 'honk', slot: me.slot });
         break;
       }
-      // Roblox-style contact pass: ram someone to hand it over
+      // Roblox-style contact pass: ram someone to hand it over.
+      // A raised ice shield holds the carrier off entirely.
       const exclude = b.noTagBackMs > 0 ? b.prevSlot : undefined;
-      const touch = nearestTarget(w, me, exclude, TUNE.PENGUIN_RADIUS * 2.15);
+      const touch = nearestTarget(w, me, exclude, TUNE.PENGUIN_RADIUS * 2.15, true);
       if (touch) {
         w.bomb = {
           s: 'carried', slot: touch.slot, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal,
@@ -164,7 +166,20 @@ export function bombStep(w: World, dtMs: number, rand: () => number = Math.rando
           .map((p) => ({ p, d: Math.hypot(p.pos.x - b.to.x, p.pos.y - b.to.y) }))
           .filter(({ d }) => d < BOMB.STICK_RADIUS)
           .sort((a, z) => a.d - z.d)[0]?.p;
-        if (catcher) {
+        if (catcher && catcher.shieldMs > 0) {
+          // Ice Shield: the bomb ricochets to the nearest other penguin
+          const next = nearestTarget(w, catcher, undefined, Infinity, true);
+          events.push({ kind: 'ricochet', slot: catcher.slot });
+          if (next) {
+            w.bomb = {
+              s: 'flying', fromSlot: catcher.slot,
+              from: { ...catcher.pos }, to: { ...next.pos },
+              t01: 0, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal,
+            };
+          } else {
+            w.bomb = { s: 'ground', pos: { ...b.to }, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal };
+          }
+        } else if (catcher) {
           w.bomb = {
             s: 'carried', slot: catcher.slot, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal,
             prevSlot: b.fromSlot, noTagBackMs: BOMB.NO_TAGBACK_MS,
@@ -183,7 +198,9 @@ export function bombStep(w: World, dtMs: number, rand: () => number = Math.rando
         break;
       }
       // live grenade: first penguin to touch it owns it — thrower included
+      // (a raised shield keeps it off you)
       const toucher = alive
+        .filter((p) => p.shieldMs <= 0)
         .map((p) => ({ p, d: Math.hypot(p.pos.x - b.pos.x, p.pos.y - b.pos.y) }))
         .filter(({ d }) => d < TUNE.PENGUIN_RADIUS + 16)
         .sort((a, z) => a.d - z.d)[0]?.p;

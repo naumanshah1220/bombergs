@@ -86,6 +86,18 @@ export class Renderer {
           });
         }
       }
+      if (e.kind === 'blink') {
+        for (const spot of [e.from, e.to]) {
+          for (let i = 0; i < 10; i++) {
+            const a = (i / 10) * Math.PI * 2;
+            this.spray.push({ x: spot.x, y: spot.y, vx: Math.cos(a) * 130, vy: Math.sin(a) * 130, age: 0, color: '#bfe9ff' });
+          }
+        }
+      }
+      if (e.kind === 'ricochet') {
+        const p = world.penguins.find((q) => q.slot === e.slot);
+        if (p) this.shockwaves.push({ x: p.pos.x, y: p.pos.y, age: 0.35 }); // small, quick ring
+      }
       if (e.kind === 'launched') {
         // blasted skyward: their cube splashes down a beat later, further out
         const p = world.penguins.find((q) => q.slot === e.slot);
@@ -709,6 +721,20 @@ export class Renderer {
     c.fillRect(-R * 1.15, -R * 0.16, R * 0.8, R * 0.32);
     c.restore();
     c.restore();
+
+    // ice shield bubble
+    if (p.shieldMs > 0) {
+      c.save();
+      c.globalAlpha = 0.32 + Math.sin(this.t * 10) * 0.08;
+      c.fillStyle = '#9fdcff';
+      c.strokeStyle = '#e8f8ff';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.arc(x, y, R * 1.9, 0, Math.PI * 2);
+      c.fill();
+      c.stroke();
+      c.restore();
+    }
 
     // name chip (unrotated)
     c.font = `bold ${Math.round(R * 0.72)}px "Segoe UI", sans-serif`;

@@ -3,7 +3,7 @@
 // flashes — the place where controller feel gets tuned before the game exists.
 
 import QRCode from 'qrcode';
-import { PLAYER_COLORS, controllerUrl } from '../shared/protocol';
+import { PLAYER_COLORS, controllerUrl, type AbilityId } from '../shared/protocol';
 import { fuseFrac } from '../sim/bomb';
 import { TUNE, type Tunables } from '../sim/constants';
 import { makeWorld, step, type World } from '../sim/world';
@@ -17,9 +17,13 @@ let world: World | undefined;
 let renderer: Renderer | undefined;
 
 const TARGET_POINTS = 3;
-type Score = { slot: number; name: string; color: string; score: number; isBot: boolean };
+type Score = { slot: number; name: string; color: string; score: number; isBot: boolean; ability?: AbilityId };
 let scores: Score[] = [];
 let stageNo = 0;
+let draftOffers: Map<number, AbilityId[]> | undefined;
+let draftAwaiting: Set<number> = new Set();
+let draftTimer: number | undefined;
+const ABILITY_POOL: AbilityId[] = ['blink', 'dash', 'shield'];
 
 function boot(): void {
   app.innerHTML = `<div style="display:grid;place-items:center;height:100%">
@@ -27,8 +31,8 @@ function boot(): void {
   createRoom(
     {
       onJoin: () => renderLobby(),
-      onInput: () => { /* harness reads state at 30Hz below */ },
-      onDraftPick: () => { /* not used in lobby */ },
+      onInput: () => { /* play loop polls controller state directly */ },
+      onDraftPick: (slot, index) => onDraftPick(slot, index),
       onLeave: () => renderLobby(),
     },
     (r) => { room = r; renderLobby(); },
@@ -157,10 +161,62 @@ function renderScorebar(): void {
     .join('');
 }
 
+/**
+ * Between stages: everyone picks 1 of 3 abilities on their own phone.
+ * 12 seconds, bots pick instantly, stragglers get a random one.
+ */
+function runDraft(): void {
+  if (!room) return;
+  draftOffers = new Map();
+  draftAwaiting = new Set();
+  for (const s of scores) {
+    const options = [...ABILITY_POOL].sort(() => Math.random() - 0.5);
+    if (s.isBot) {
+      s.ability = options[Math.floor(Math.random() * options.length)];
+      continue;
+    }
+    const conn = room.controllers.get(s.slot);
+    if (!conn?.connected) { s.ability ??= undefined; continue; }
+    draftOffers.set(s.slot, options);
+    draftAwaiting.add(s.slot);
+    room.sendTo(s.slot, { t: 'draftOffer', options });
+  }
+  const b = document.getElementById('banner');
+  if (b) b.innerHTML = `PICK YOUR ABILITY 📱<br/><span style="font-size:20px;opacity:.8">on your phone…</span>`;
+  if (draftAwaiting.size === 0) { startStage(); return; }
+  draftTimer = window.setTimeout(() => {
+    // stragglers draft blind
+    for (const slot of draftAwaiting) {
+      const s = scores.find((q) => q.slot === slot);
+      const opts = draftOffers?.get(slot) ?? ABILITY_POOL;
+      if (s) s.ability = opts[Math.floor(Math.random() * opts.length)];
+    }
+    finishDraft();
+  }, 12000);
+}
+
+function onDraftPick(slot: number, index: 0 | 1 | 2): void {
+  if (!draftOffers || !draftAwaiting.has(slot)) return;
+  const s = scores.find((q) => q.slot === slot);
+  const opts = draftOffers.get(slot);
+  if (s && opts) s.ability = opts[index] ?? opts[0];
+  draftAwaiting.delete(slot);
+  if (draftAwaiting.size === 0) finishDraft();
+}
+
+function finishDraft(): void {
+  if (draftTimer) clearTimeout(draftTimer);
+  draftTimer = undefined;
+  draftOffers = undefined;
+  if (mode === 'play') startStage();
+}
+
 function startStage(): void {
   if (!room) return;
   stageNo++;
-  world = makeWorld(scores.map((s) => ({ slot: s.slot, name: s.name, color: s.color, isDummy: s.isBot })));
+  world = makeWorld(scores.map((s) => ({
+    slot: s.slot, name: s.name, color: s.color, isDummy: s.isBot, ability: s.ability,
+  })));
   app.innerHTML = `<canvas id="arena" style="width:100%;height:100%;display:block"></canvas>
     <div id="scorebar" style="position:fixed;top:14px;left:16px;font-size:15px;pointer-events:none"></div>
     <div id="banner" style="position:fixed;top:80px;left:0;right:0;text-align:center;
@@ -247,7 +303,7 @@ function startStage(): void {
           void renderLobby();
         }, 8000);
       } else {
-        setTimeout(() => { if (mode === 'play') startStage(); }, 3000);
+        setTimeout(() => { if (mode === 'play') runDraft(); }, 2600);
       }
     }
 
