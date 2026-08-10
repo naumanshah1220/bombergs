@@ -22,7 +22,7 @@ const ABILITY_INFO: Record<AbilityId, { icon: string; name: string; desc: string
 export class ControllerUi {
   private root: HTMLElement;
   private handlers: UiHandlers;
-  private steerBar?: HTMLElement;
+  private wheel?: HTMLElement;
   private flatNudge?: HTMLElement;
   private audio?: AudioContext;
   private tickTimer?: number;
@@ -75,6 +75,10 @@ export class ControllerUi {
 
   showCalibrate(sim: boolean): void {
     this.base(this.color, `
+      <style>
+        #rotate-hint { display: none; }
+        @media (orientation: portrait) { #rotate-hint { display: block; } }
+      </style>
       <div style="font-size:52px">🛒</div>
       <div style="font-size:24px;font-weight:700;color:#04121f">Grab your trolley!</div>
       <div style="font-size:17px;color:#04121f;opacity:.75;max-width:320px">
@@ -82,6 +86,9 @@ export class ControllerUi {
           ? 'Sim mode: ← → keys steer, Space is your button.'
           : 'Hold the phone sideways with both hands, like a steering wheel facing you.'}
       </div>
+      ${sim ? '' : `<div id="rotate-hint" style="font-size:17px;font-weight:700;color:#04121f;
+        background:rgba(255,255,255,.5);padding:10px 18px;border-radius:12px">
+        🔄 Turn your phone sideways!</div>`}
       <button id="cal" style="font-size:20px;padding:16px 40px;border-radius:14px;
         border:none;background:#04121f;color:#fff;font-weight:700">TAP WHEN READY</button>`);
     this.root.querySelector('#cal')!.addEventListener('click', () => {
@@ -91,19 +98,27 @@ export class ControllerUi {
   }
 
   showPlay(name: string): void {
+    // The wheel is the feedback: it rotates exactly as much as the game
+    // thinks you're steering, so grip direction is self-teaching.
     this.base(this.color, `
-      <div style="position:absolute;top:14px;left:0;right:0;display:flex;justify-content:center">
-        <div style="width:60%;height:8px;background:rgba(0,0,0,.25);border-radius:4px;overflow:hidden">
-          <div id="steerbar" style="height:100%;width:4%;margin-left:48%;background:#04121f;border-radius:4px"></div>
-        </div></div>
-      <div id="flat" style="position:absolute;top:34px;font-size:15px;color:#04121f;
+      <div id="flat" style="position:absolute;top:24px;font-size:15px;color:#04121f;
         font-weight:700;visibility:hidden">📱 Lift your handlebar!</div>
       <div style="font-size:17px;color:#04121f;opacity:.7">${name}</div>
-      <button id="act" style="font-size:30px;width:200px;height:200px;border-radius:50%;
-        border:8px solid rgba(0,0,0,.25);background:rgba(255,255,255,.85);color:#04121f;
-        font-weight:800;touch-action:none">HONK</button>
+      <div id="wheel" style="position:relative;width:260px;height:260px;will-change:transform">
+        <svg viewBox="0 0 100 100" style="width:100%;height:100%">
+          <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(0,0,0,.35)" stroke-width="8"/>
+          <line x1="50" y1="8" x2="50" y2="30" stroke="rgba(0,0,0,.35)" stroke-width="6" stroke-linecap="round"/>
+          <line x1="8" y1="50" x2="30" y2="50" stroke="rgba(0,0,0,.35)" stroke-width="6" stroke-linecap="round"/>
+          <line x1="70" y1="50" x2="92" y2="50" stroke="rgba(0,0,0,.35)" stroke-width="6" stroke-linecap="round"/>
+          <line x1="50" y1="70" x2="50" y2="92" stroke="rgba(0,0,0,.35)" stroke-width="6" stroke-linecap="round"/>
+          <circle cx="50" cy="12" r="5" fill="#04121f"/>
+        </svg>
+        <button id="act" style="position:absolute;inset:0;margin:auto;font-size:24px;
+          width:130px;height:130px;border-radius:50%;border:6px solid rgba(0,0,0,.25);
+          background:rgba(255,255,255,.88);color:#04121f;font-weight:800;touch-action:none">HONK</button>
+      </div>
       <div style="font-size:14px;color:#04121f;opacity:.55">tilt to steer</div>`);
-    this.steerBar = this.root.querySelector('#steerbar')!;
+    this.wheel = this.root.querySelector('#wheel')!;
     this.flatNudge = this.root.querySelector('#flat')!;
     const btn = this.root.querySelector<HTMLButtonElement>('#act')!;
     const press = (down: boolean) => (e: Event) => { e.preventDefault(); this.handlers.onAction(down); };
@@ -114,11 +129,7 @@ export class ControllerUi {
 
   /** Live updates inside the play state. */
   updatePlay(steer: number, flat: boolean): void {
-    if (this.steerBar) {
-      const pct = 4 + Math.abs(steer) * 46;
-      this.steerBar.style.width = `${pct}%`;
-      this.steerBar.style.marginLeft = steer < 0 ? `${50 - pct}%` : '50%';
-    }
+    if (this.wheel) this.wheel.style.transform = `rotate(${steer * 60}deg)`;
     if (this.flatNudge) this.flatNudge.style.visibility = flat ? 'visible' : 'hidden';
   }
 
@@ -132,7 +143,7 @@ export class ControllerUi {
     const btn = this.root.querySelector<HTMLButtonElement>('#act')!;
     btn.addEventListener('pointerdown', (e) => { e.preventDefault(); this.handlers.onAction(true); });
     btn.addEventListener('pointerup', (e) => { e.preventDefault(); this.handlers.onAction(false); });
-    this.steerBar = undefined;
+    this.wheel = undefined;
     this.flatNudge = undefined;
   }
 

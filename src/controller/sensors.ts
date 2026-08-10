@@ -33,9 +33,11 @@ export function startRealSensors(): SensorSource {
   window.addEventListener('devicemotion', (ev) => {
     const a = ev.accelerationIncludingGravity;
     if (!a || a.x == null || a.y == null || a.z == null) return;
-    // Note: iOS and Android disagree on the sign of gravity; calibration
-    // absorbs the constant offset, and steering only uses deltas.
-    g.x = g.x * (1 - EMA_ALPHA) + a.x * EMA_ALPHA;
+    // x is negated to match the sim's convention (physical right-tilt =
+    // steer right, confirmed on-device). iOS vs Android differ by a FULL
+    // vector flip, which the calibrated-delta math cancels out — so this
+    // single correction holds on both platforms.
+    g.x = g.x * (1 - EMA_ALPHA) + -a.x * EMA_ALPHA;
     g.y = g.y * (1 - EMA_ALPHA) + a.y * EMA_ALPHA;
     g.z = g.z * (1 - EMA_ALPHA) + a.z * EMA_ALPHA;
     samples++;
