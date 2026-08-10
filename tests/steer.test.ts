@@ -31,15 +31,15 @@ describe('makeSteer', () => {
     expect(steer(rolled(-1.9))).toBe(0);
   });
 
-  it('full lock at ±40°', () => {
-    expect(steer(rolled(40))).toBeCloseTo(1);
-    expect(steer(rolled(-40))).toBeCloseTo(-1);
+  it('full lock at ±32°', () => {
+    expect(steer(rolled(32))).toBeCloseTo(1);
+    expect(steer(rolled(-32))).toBeCloseTo(-1);
     expect(steer(rolled(60))).toBeCloseTo(1); // clamped past lock
   });
 
   it('is monotonic and symmetric between deadzone and lock', () => {
     let prev = 0;
-    for (let d = 3; d <= 40; d += 1) {
+    for (let d = 3; d <= 32; d += 1) {
       const s = steer(rolled(d));
       expect(s).toBeGreaterThan(prev);
       expect(steer(rolled(-d))).toBeCloseTo(-s);

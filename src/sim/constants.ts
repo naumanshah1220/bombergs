@@ -1,13 +1,20 @@
 // Every gameplay tunable lives here — the single tuning surface.
+// C is mutable on purpose: the host's ?tune=1 panel writes these live.
 
-export const BASE_SPEED = 140;          // px/s forward thrust
-export const CARRIER_SPEED_MULT = 1.15; // bomb carrier moves faster, no ability
-export const TURN_RATE = 2.6;           // rad/s at full lock
-export const ICE_GRIP = 3.0;            // 1/s — how fast velocity chases heading (low = drift)
-export const PENGUIN_RADIUS = 16;       // px collision radius
-export const FLOE_RADIUS = 340;         // px initial floe radius
+export const C = {
+  BASE_SPEED: 170,          // px/s forward thrust
+  CARRIER_SPEED_MULT: 1.15, // bomb carrier moves faster, no ability
+  TURN_RATE: 3.6,           // rad/s at full lock
+  ICE_GRIP: 4.2,            // 1/s — how fast velocity chases heading (low = drift)
+  PENGUIN_RADIUS: 22,       // px collision radius
+  FLOE_RADIUS: 520,         // px initial floe radius
+} as const satisfies Record<string, number>;
+
+export type Tunables = { -readonly [K in keyof typeof C]: number };
+export const TUNE = C as Tunables;
+
 export const FLOE_WOBBLE = 0.12;        // fraction of radius randomized per spoke
 export const FLOE_SPOKES = 64;          // star-polygon resolution
 export const FLOE_MIN_AREA_FRAC = 0.12; // floe never shrinks below this fraction
-export const ARENA_W = 1280;            // world units; floe centered here
-export const ARENA_H = 800;
+export const ARENA_W = 1920;            // world units; floe centered here
+export const ARENA_H = 1180;

@@ -1,11 +1,8 @@
 // Authoritative world state + step(). Pure logic: no DOM, no network, no
 // rendering. The host calls step() at 60Hz and forwards the returned events.
 
-import {
-  ARENA_H, ARENA_W, BASE_SPEED, FLOE_RADIUS, FLOE_WOBBLE, ICE_GRIP,
-  PENGUIN_RADIUS, TURN_RATE,
-} from './constants';
-import { contains, makeFloe, type Floe, type Vec2 } from './floe';
+import { ARENA_H, ARENA_W, FLOE_WOBBLE, TUNE } from './constants';
+import { contains, makeFloe, radiusAt, type Floe, type Vec2 } from './floe';
 
 export type Penguin = {
   slot: number;
@@ -31,10 +28,10 @@ export type World = {
 };
 
 export function makeWorld(players: { slot: number; name: string; color: string; isDummy?: boolean }[], rand: () => number = Math.random): World {
-  const floe = makeFloe(ARENA_W / 2, ARENA_H / 2, FLOE_RADIUS, FLOE_WOBBLE, rand);
+  const floe = makeFloe(ARENA_W / 2, ARENA_H / 2, TUNE.FLOE_RADIUS, FLOE_WOBBLE, rand);
   const penguins = players.map((p, i) => {
     const angle = (i / players.length) * Math.PI * 2;
-    const r = FLOE_RADIUS * 0.55;
+    const r = TUNE.FLOE_RADIUS * 0.55;
     return {
       slot: p.slot,
       name: p.name,
@@ -58,14 +55,14 @@ export function step(w: World, dtMs: number): WorldEvent[] {
 
   for (const p of w.penguins) {
     if (!p.alive) continue;
-    if (p.isDummy) p.steer = 0.55; // lazy circles until real bots (Task 8)
+    if (p.isDummy) p.steer = dummySteer(w, p);
 
-    p.heading += p.steer * TURN_RATE * dt;
+    p.heading += p.steer * TUNE.TURN_RATE * dt;
     const thrust = {
-      x: Math.cos(p.heading) * BASE_SPEED * p.speedMult,
-      y: Math.sin(p.heading) * BASE_SPEED * p.speedMult,
+      x: Math.cos(p.heading) * TUNE.BASE_SPEED * p.speedMult,
+      y: Math.sin(p.heading) * TUNE.BASE_SPEED * p.speedMult,
     };
-    const k = Math.min(ICE_GRIP * dt, 1);
+    const k = Math.min(TUNE.ICE_GRIP * dt, 1);
     p.vel.x += (thrust.x - p.vel.x) * k;
     p.vel.y += (thrust.y - p.vel.y) * k;
     p.pos.x += p.vel.x * dt;
@@ -81,7 +78,7 @@ export function step(w: World, dtMs: number): WorldEvent[] {
       const dx = b.pos.x - a.pos.x;
       const dy = b.pos.y - a.pos.y;
       const dist = Math.hypot(dx, dy) || 0.001;
-      const overlap = PENGUIN_RADIUS * 2 - dist;
+      const overlap = TUNE.PENGUIN_RADIUS * 2 - dist;
       if (overlap <= 0) continue;
       const nx = dx / dist;
       const ny = dy / dist;
@@ -108,4 +105,25 @@ export function step(w: World, dtMs: number): WorldEvent[] {
   }
 
   return events;
+}
+
+/**
+ * Placeholder dummy driving until real bots: wander gently, but steer hard
+ * toward the floe center whenever the path ahead runs out of ice.
+ */
+function dummySteer(w: World, p: Penguin): number {
+  const lookAhead = 90;
+  const fx = p.pos.x + Math.cos(p.heading) * lookAhead;
+  const fy = p.pos.y + Math.sin(p.heading) * lookAhead;
+  const dx = fx - w.floe.cx;
+  const dy = fy - w.floe.cy;
+  const margin = radiusAt(w.floe, Math.atan2(dy, dx)) - Math.hypot(dx, dy);
+  if (margin < 60) {
+    // steer toward center: pick the turn direction that faces us inward
+    const toCenter = Math.atan2(w.floe.cy - p.pos.y, w.floe.cx - p.pos.x);
+    let diff = toCenter - p.heading;
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    return Math.sign(diff);
+  }
+  return Math.sin(w.tick / 90 + p.slot * 2) * 0.5;
 }

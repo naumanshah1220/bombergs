@@ -4,6 +4,7 @@
 
 import QRCode from 'qrcode';
 import { PLAYER_COLORS, controllerUrl } from '../shared/protocol';
+import { TUNE, type Tunables } from '../sim/constants';
 import { makeWorld, step, type World } from '../sim/world';
 import { Renderer } from './render';
 import { createRoom, type Room } from './net';
@@ -77,9 +78,52 @@ async function renderLobby(): Promise<void> {
 
 const DUMMY_NAMES = ['Bot Bergy', 'Bot Floe', 'Bot Chilly'];
 
+/** ?tune=1 — live sliders over the mutable TUNE constants. */
+function mountTunePanel(): void {
+  if (new URLSearchParams(location.search).get('tune') !== '1') return;
+  if (document.getElementById('tune')) return;
+  const ranges: Record<keyof Tunables, [number, number]> = {
+    BASE_SPEED: [60, 400],
+    CARRIER_SPEED_MULT: [1, 2],
+    TURN_RATE: [1, 8],
+    ICE_GRIP: [1, 12],
+    PENGUIN_RADIUS: [10, 40],
+    FLOE_RADIUS: [200, 560],
+  };
+  const wrap = document.createElement('div');
+  wrap.id = 'tune';
+  wrap.style.cssText = `position:fixed;top:10px;right:10px;z-index:50;background:rgba(6,10,30,.9);
+    padding:14px;border-radius:12px;font-size:12px;display:flex;flex-direction:column;gap:6px;width:230px`;
+  for (const key of Object.keys(ranges) as (keyof Tunables)[]) {
+    const [min, max] = ranges[key];
+    const row = document.createElement('label');
+    row.innerHTML = `<span style="display:flex;justify-content:space-between">
+      <b>${key}</b><span id="tv-${key}">${TUNE[key]}</span></span>`;
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = String(min);
+    input.max = String(max);
+    input.step = '0.1';
+    input.value = String(TUNE[key]);
+    input.style.width = '100%';
+    input.addEventListener('input', () => {
+      TUNE[key] = Number(input.value);
+      document.getElementById(`tv-${key}`)!.textContent = input.value;
+    });
+    row.appendChild(input);
+    wrap.appendChild(row);
+  }
+  const note = document.createElement('div');
+  note.style.cssText = 'opacity:.5;margin-top:4px';
+  note.textContent = 'FLOE_RADIUS applies next stage';
+  wrap.appendChild(note);
+  document.body.appendChild(wrap);
+}
+
 function startGame(): void {
   if (!room) return;
   mode = 'play';
+  mountTunePanel();
   const players = [...room.controllers.values()]
     .filter((c) => c.connected)
     .map((c) => ({ slot: c.slot, name: c.name, color: c.color }));
@@ -110,33 +154,35 @@ function startGame(): void {
       if (p && !p.isDummy) p.steer = c.steer;
     }
     const events = step(world, dt);
-    renderer.addEvents(events);
+    renderer.addEvents(events, world);
     for (const e of events) {
       if (e.kind === 'eliminated') {
         const placement = world.penguins.filter((q) => q.alive).length + 1;
         room.sendTo(e.slot, { t: 'status', alive: false, placement, score: 0 });
       }
     }
+    // Stage ends when one penguin remains — or when every HUMAN is out
+    // (nobody wants to spectate bots forever). Auto-restarts either way.
     const alive = world.penguins.filter((q) => q.alive);
-    if (alive.length <= 1 && !stageOver) {
+    const humansAlive = alive.filter((q) => !q.isDummy).length;
+    const hadHumans = world.penguins.some((q) => !q.isDummy);
+    if (!stageOver && (alive.length <= 1 || (hadHumans && humansAlive === 0))) {
       stageOver = true;
       const b = document.getElementById('banner');
-      if (b && alive[0]) {
-        b.innerHTML = `${alive[0].name} WINS THE STAGE! 🏆<br/>
-          <span style="font-size:20px;opacity:.8">press R to run it back</span>`;
-        room.sendTo(alive[0].slot, { t: 'status', alive: false, placement: 1, score: 1 });
+      const winner = alive.length === 1 ? alive[0] : undefined;
+      if (b) {
+        b.innerHTML = `${winner ? `${winner.name} WINS THE STAGE! 🏆` : 'EVERYONE IS SWIMMING 🌊'}<br/>
+          <span style="font-size:20px;opacity:.8">next stage in 3…</span>`;
       }
+      if (winner && !winner.isDummy) {
+        room.sendTo(winner.slot, { t: 'status', alive: false, placement: 1, score: 1 });
+      }
+      setTimeout(() => { if (mode === 'play') startGame(); }, 3000);
     }
     renderer.draw(world, dt);
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
-  window.addEventListener('keydown', function restart(e) {
-    if (e.key.toLowerCase() === 'r' && mode === 'play') {
-      window.removeEventListener('keydown', restart);
-      startGame();
-    }
-  });
 }
 
 function renderList(): void {

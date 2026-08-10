@@ -11,8 +11,8 @@
 export type Vec3 = { x: number; y: number; z: number };
 
 export const DEADZONE_RAD = (2 * Math.PI) / 180;
-export const FULL_LOCK_RAD = (40 * Math.PI) / 180;
-export const RESPONSE_EXP = 1.6;
+export const FULL_LOCK_RAD = (32 * Math.PI) / 180;
+export const RESPONSE_EXP = 1.25;
 /** |g.z|/|g| above this = phone held flat; steering is unreliable. */
 export const FLAT_LIMIT = 0.85;
 

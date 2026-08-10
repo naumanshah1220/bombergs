@@ -12,7 +12,7 @@ export type SensorSource = {
   sim: boolean;
 };
 
-const EMA_ALPHA = 0.2;
+const EMA_ALPHA = 0.4; // light smoothing only — responsiveness beats silk
 
 /** iOS 13+ gates motion behind a permission prompt that must come from a tap. */
 export async function requestMotionPermission(): Promise<boolean> {

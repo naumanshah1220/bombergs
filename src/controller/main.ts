@@ -76,6 +76,8 @@ function handleHostMessage(msg: H2C): void {
       break;
     case 'phase':
       if (msg.phase === 'calibrate') ui.showCalibrate(simMode);
+      // New stage: anyone calibrated returns to the wheel (revives the dead)
+      if (msg.phase === 'play' && steerFn) { carrying = false; ui.stopFuse(); ui.showPlay(playerName); }
       break;
     case 'bomb':
       if (msg.carrying && !carrying) ui.showBomb();
@@ -126,6 +128,6 @@ setInterval(() => {
   }
   send({ t: 'input', steer: flat ? 0 : steer, tap: tapQueued || tapHeld });
   tapQueued = false;
-}, 33);
+}, 20); // 50Hz — input latency budget matters more than bandwidth here
 
 connect();

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { BASE_SPEED, PENGUIN_RADIUS } from '../src/sim/constants';
+import { TUNE } from '../src/sim/constants';
+
+const BASE_SPEED = TUNE.BASE_SPEED;
+const PENGUIN_RADIUS = TUNE.PENGUIN_RADIUS;
 import { makeWorld, step } from '../src/sim/world';
 
 const rand = () => 0.5;
