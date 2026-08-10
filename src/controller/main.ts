@@ -23,6 +23,7 @@ let lastOffer: AbilityId[] = [];
 let myAbility: AbilityId | undefined;
 let scheme: DriveScheme = (localStorage.getItem('bombergs-scheme') as DriveScheme) || 'auto';
 let gasHeld = false;
+let moveVec = { x: 0, y: 0 };
 
 const ui = new ControllerUi(app, {
   onJoin(name) {
@@ -53,10 +54,14 @@ const ui = new ControllerUi(app, {
   onThrottle(pressed) {
     gasHeld = pressed;
   },
+  onMove(x, y) {
+    moveVec = { x, y };
+  },
   onSchemeToggle() {
-    scheme = scheme === 'auto' ? 'gas' : 'auto';
+    scheme = scheme === 'auto' ? 'gas' : scheme === 'gas' ? 'stick' : 'auto';
     localStorage.setItem('bombergs-scheme', scheme);
     gasHeld = false;
+    moveVec = { x: 0, y: 0 };
     // re-render whichever driving screen we're on
     if (carrying) ui.showBomb(scheme);
     else if (steerFn) ui.showPlay(playerName, myAbility, scheme);
@@ -151,6 +156,7 @@ setInterval(() => {
     steer: flat ? 0 : steer,
     tap: tapQueued || tapHeld,
     throttle: scheme === 'gas' ? (gasHeld ? 1 : 0) : undefined,
+    move: scheme === 'stick' ? moveVec : undefined,
   });
   tapQueued = false;
 }, 20); // 50Hz — input latency budget matters more than bandwidth here

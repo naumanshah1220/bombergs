@@ -3,13 +3,20 @@
 
 import type { AbilityId } from '../shared/protocol';
 
-export type DriveScheme = 'auto' | 'gas';
+export type DriveScheme = 'auto' | 'gas' | 'stick';
+
+export const SCHEME_LABEL: Record<DriveScheme, string> = {
+  auto: 'AUTO-DRIVE',
+  gas: 'GAS PEDAL',
+  stick: 'JOYSTICK',
+};
 
 export type UiHandlers = {
   onJoin(name: string): void;
   onCalibrateTap(): void;
   onAction(pressed: boolean): void;
   onThrottle(pressed: boolean): void;
+  onMove(x: number, y: number): void;
   onSchemeToggle(): void;
   onDraftPick(index: 0 | 1 | 2): void;
   onSimAngle?(deg: number): void;
@@ -105,8 +112,87 @@ export class ControllerUi {
   private schemeChip(scheme: DriveScheme): string {
     return `<button id="schemebtn" style="position:absolute;top:12px;left:12px;font-size:13px;
       padding:7px 12px;border-radius:10px;border:2px solid rgba(0,0,0,.3);
-      background:rgba(255,255,255,.35);color:#04121f;font-weight:700">
-      ⚙ ${scheme === 'auto' ? 'AUTO-DRIVE' : 'GAS PEDAL'}</button>`;
+      background:rgba(255,255,255,.35);color:#04121f;font-weight:700;z-index:5">
+      ⚙ ${SCHEME_LABEL[scheme]}</button>`;
+  }
+
+  /**
+   * Floating virtual joystick on the left half: the stick base appears where
+   * the thumb lands, deflection = walk direction and speed.
+   */
+  private joystick(actionLabel: string): string {
+    return `
+      <div id="stickzone" style="position:absolute;left:0;top:0;bottom:0;width:55%;touch-action:none">
+        <div id="stickbase" style="position:absolute;width:140px;height:140px;border-radius:50%;
+          border:4px solid rgba(0,0,0,.35);background:rgba(255,255,255,.18);display:none;
+          transform:translate(-50%,-50%);pointer-events:none">
+          <div id="stickknob" style="position:absolute;left:50%;top:50%;width:64px;height:64px;
+            border-radius:50%;background:rgba(255,255,255,.85);border:4px solid rgba(0,0,0,.3);
+            transform:translate(-50%,-50%)"></div>
+        </div>
+        <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+          font-size:14px;color:rgba(4,18,31,.5);font-weight:700;pointer-events:none">
+          ⊕ left thumb here</div>
+      </div>
+      <button id="sideact" style="position:absolute;right:4vw;top:50%;transform:translateY(-50%);
+        width:29vmin;height:29vmin;border-radius:50%;font-size:19px;font-weight:800;
+        border:6px solid rgba(0,0,0,.3);background:rgba(255,255,255,.85);color:#04121f;
+        touch-action:none;transition:filter .06s">${actionLabel}</button>`;
+  }
+
+  private bindJoystick(): void {
+    const zone = document.getElementById('stickzone');
+    const base = document.getElementById('stickbase');
+    const knob = document.getElementById('stickknob');
+    if (!zone || !base || !knob) return;
+    const RADIUS = 62;
+    let originX = 0;
+    let originY = 0;
+    let activeId: number | undefined;
+    const update = (e: PointerEvent) => {
+      let dx = e.clientX - originX;
+      let dy = e.clientY - originY;
+      const d = Math.hypot(dx, dy);
+      if (d > RADIUS) { dx *= RADIUS / d; dy *= RADIUS / d; }
+      knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      this.handlers.onMove(dx / RADIUS, dy / RADIUS);
+    };
+    zone.addEventListener('pointerdown', (e) => {
+      activeId = e.pointerId;
+      zone.setPointerCapture(e.pointerId);
+      originX = e.clientX;
+      originY = e.clientY;
+      base.style.display = 'block';
+      base.style.left = `${originX}px`;
+      base.style.top = `${originY}px`;
+      update(e);
+    });
+    zone.addEventListener('pointermove', (e) => {
+      if (e.pointerId === activeId) update(e);
+    });
+    const release = (e: PointerEvent) => {
+      if (e.pointerId !== activeId) return;
+      activeId = undefined;
+      base.style.display = 'none';
+      knob.style.transform = 'translate(-50%,-50%)';
+      this.handlers.onMove(0, 0);
+    };
+    zone.addEventListener('pointerup', release);
+    zone.addEventListener('pointercancel', release);
+    // right-side action button
+    const act = document.getElementById('sideact');
+    if (act) {
+      const press = (down: boolean) => (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        act.style.filter = down ? 'brightness(.8)' : '';
+        if (down) this.blip(340, 0.1);
+        this.handlers.onAction(down);
+      };
+      act.addEventListener('pointerdown', press(true));
+      act.addEventListener('pointerup', press(false));
+      act.addEventListener('pointercancel', press(false));
+    }
   }
 
   private bindSchemeChip(): void {
@@ -154,7 +240,21 @@ export class ControllerUi {
     const actionWord = a ? a.name : 'honk';
     const hint = scheme === 'gas'
       ? `tilt to steer · right thumb gas · left thumb ${actionWord}`
-      : `tilt to steer · tap anywhere for ${actionWord}`;
+      : scheme === 'stick'
+        ? `left thumb walks · right thumb ${actionWord}`
+        : `tilt to steer · tap anywhere for ${actionWord}`;
+    if (scheme === 'stick') {
+      this.base(this.color, `
+        <div style="font-size:17px;color:#04121f;opacity:.7">${name}</div>
+        <div style="font-size:14px;color:#04121f;opacity:.55">${hint}</div>
+        ${this.schemeChip(scheme)}
+        ${this.joystick(btnLabel)}`);
+      this.wheel = undefined;
+      this.flatNudge = undefined;
+      this.bindSchemeChip();
+      this.bindJoystick();
+      return;
+    }
     this.base(this.color, `
       <div id="flat" style="position:absolute;top:24px;font-size:15px;color:#04121f;
         font-weight:700;visibility:hidden">📱 Lift your handlebar!</div>
@@ -208,18 +308,23 @@ export class ControllerUi {
   }
 
   showBomb(scheme: DriveScheme = 'auto'): void {
+    const throwLabel = '💣<div style="font-size:15px">THROW</div>';
+    const hint = scheme === 'gas' ? 'left thumb throws!'
+      : scheme === 'stick' ? 'right thumb throws!'
+      : 'tap anywhere to throw!';
     this.base('#120607', `
       <div id="bombface" style="font-size:110px;transition:transform .1s">💣</div>
       <div style="font-size:24px;font-weight:800;color:#ff5a5f">YOU HAVE THE BOMB</div>
       ${scheme === 'auto' ? `<button id="act" style="font-size:26px;padding:20px 48px;border-radius:16px;
         border:4px solid #ff5a5f;background:#2a0d10;color:#fff;font-weight:800;
         pointer-events:none;transition:transform .08s">THROW</button>` : ''}
-      <div style="font-size:15px;opacity:.6">get close to someone…
-        ${scheme === 'gas' ? 'left thumb throws!' : 'tap anywhere to throw!'}</div>
+      <div style="font-size:15px;opacity:.6">get close to someone… ${hint}</div>
       ${this.schemeChip(scheme)}
-      ${scheme === 'gas' ? this.sideButtons('💣<div style="font-size:15px">THROW</div>') : ''}`);
+      ${scheme === 'gas' ? this.sideButtons(throwLabel) : ''}
+      ${scheme === 'stick' ? this.joystick(throwLabel) : ''}`);
     this.bindSchemeChip();
     if (scheme === 'gas') this.bindSideButtons();
+    else if (scheme === 'stick') this.bindJoystick();
     else this.bindTapAnywhere();
     this.wheel = undefined;
     this.flatNudge = undefined;

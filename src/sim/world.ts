@@ -18,6 +18,7 @@ export type Penguin = {
   steer: number;     // [-1, 1] latest input
   tap: boolean;      // consumed by abilities / the bomb machine each step
   throttle?: number; // gas-pedal scheme: 0..1; undefined = auto-drive (full)
+  move?: Vec2;       // joystick scheme: direction+magnitude; overrides steer
   speedMult: number;
   alive: boolean;
   isDummy: boolean;  // bot-driven
@@ -42,11 +43,12 @@ export type WorldEvent =
 
 /** Per-stage complexity dials — early stages are gentle, later ones cruel. */
 export type StageRules = {
+  bomb: boolean;      // is the bomb in play at all? (practice starts without)
   edgeDeath: boolean; // false: the rim is a soft bumper; true: water eliminates
   floeBreak: boolean; // do explosions carve the floe?
 };
 
-export const DEFAULT_RULES: StageRules = { edgeDeath: true, floeBreak: true };
+export const DEFAULT_RULES: StageRules = { bomb: true, edgeDeath: true, floeBreak: true };
 
 export type World = {
   penguins: Penguin[];
@@ -97,8 +99,23 @@ export function step(w: World, dtMs: number): WorldEvent[] {
       if (input.tap) p.tap = true;
     }
 
-    p.heading += p.steer * TUNE.TURN_RATE * dt;
-    const power = TUNE.BASE_SPEED * p.speedMult * (p.throttle ?? 1);
+    let power: number;
+    if (p.move && Math.hypot(p.move.x, p.move.y) > 0.05) {
+      // joystick: walk where you point — heading snaps quickly toward the
+      // stick, speed scales with deflection, releasing the stick stops you
+      const mag = Math.min(Math.hypot(p.move.x, p.move.y), 1);
+      const target = Math.atan2(p.move.y, p.move.x);
+      let diff = target - p.heading;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      p.heading += Math.max(-1, Math.min(1, diff)) * 12 * dt;
+      power = TUNE.BASE_SPEED * p.speedMult * mag;
+    } else if (p.move) {
+      power = 0; // stick released: stand still
+    } else {
+      // trolley: always rolling, tilt steers, optional gas pedal
+      p.heading += p.steer * TUNE.TURN_RATE * dt;
+      power = TUNE.BASE_SPEED * p.speedMult * (p.throttle ?? 1);
+    }
     const thrust = {
       x: Math.cos(p.heading) * power,
       y: Math.sin(p.heading) * power,
@@ -181,7 +198,7 @@ export function step(w: World, dtMs: number): WorldEvent[] {
   }
 
   // The bomb machine consumes taps and may eliminate penguins.
-  events.push(...bombStep(w, dtMs));
+  if (w.rules.bomb) events.push(...bombStep(w, dtMs));
   for (const p of w.penguins) p.tap = false;
 
   return events;

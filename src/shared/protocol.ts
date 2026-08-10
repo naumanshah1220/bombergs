@@ -6,8 +6,9 @@ export type AbilityId = 'blink' | 'dash' | 'shield';
 /** Controller → Host */
 export type C2H =
   | { t: 'hello'; name: string; reclaim?: string }
-  // throttle: 0..1 when the phone is in gas-pedal mode; absent = auto-drive
-  | { t: 'input'; steer: number; tap: boolean; throttle?: number }
+  // throttle: 0..1 in gas-pedal mode; move: joystick vector in stick mode;
+  // both absent = auto-drive
+  | { t: 'input'; steer: number; tap: boolean; throttle?: number; move?: { x: number; y: number } }
   | { t: 'draftPick'; index: 0 | 1 | 2 };
 
 /** Host → Controller */

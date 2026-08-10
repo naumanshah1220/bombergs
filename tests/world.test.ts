@@ -50,6 +50,27 @@ describe('trolley physics', () => {
     expect(events.map((e) => e.kind)).toEqual(['splash', 'eliminated']);
   });
 
+  it('joystick input walks toward the stick and stops on release', () => {
+    const w = makeWorld(players(1), rand);
+    const p = w.penguins[0];
+    p.pos = { x: w.floe.cx, y: w.floe.cy };
+    p.heading = 0;
+    p.move = { x: 0, y: 1 }; // push straight down
+    for (let i = 0; i < 60; i++) step(w, 1000 / 60);
+    expect(p.pos.y).toBeGreaterThan(w.floe.cy + 60);
+    expect(Math.abs(p.heading - Math.PI / 2)).toBeLessThan(0.1);
+    const yStop = p.pos.y;
+    p.move = { x: 0, y: 0 }; // release
+    for (let i = 0; i < 60; i++) step(w, 1000 / 60);
+    expect(p.pos.y - yStop).toBeLessThan(30); // coasts briefly, then stands still
+  });
+
+  it('a bomb-free rules world never delivers a bomb', () => {
+    const w = makeWorld(players(2), rand, { bomb: false, edgeDeath: true, floeBreak: false });
+    for (let i = 0; i < 400; i++) step(w, 16); // > idle + skua time
+    expect(w.bomb.s).toBe('idle');
+  });
+
   it('separates overlapping penguins', () => {
     const w = makeWorld(players(2), rand);
     const [a, b] = w.penguins;

@@ -4,7 +4,7 @@
 
 import QRCode from 'qrcode';
 import { PLAYER_COLORS, controllerUrl, type AbilityId } from '../shared/protocol';
-import { fuseFrac } from '../sim/bomb';
+import { fuseFrac, idleBomb } from '../sim/bomb';
 import { TUNE, type Tunables } from '../sim/constants';
 import { makeWorld, step, type StageRules, type World } from '../sim/world';
 import { Sfx } from './audio';
@@ -17,6 +17,10 @@ let mode: 'lobby' | 'play' | 'practice' = 'lobby';
 let world: World | undefined;
 let renderer: Renderer | undefined;
 let sfx: Sfx | undefined;
+// Every startStage/startPractice bumps this; stale rAF loops see the bump and
+// die. (A missing guard here once made each new stage silently double the
+// simulation rate — the "game speeds up every round" bug.)
+let loopGen = 0;
 
 const TARGET_POINTS = 3;
 type Score = { slot: number; name: string; color: string; score: number; isBot: boolean; ability?: AbilityId };
@@ -172,7 +176,7 @@ function renderScorebar(): void {
 
 /** Complexity ramps in: bumper rim first, deadly water at 3, breaking ice at 4. */
 function rulesForStage(n: number): StageRules {
-  return { edgeDeath: n >= 3, floeBreak: n >= 4 };
+  return { bomb: true, edgeDeath: n >= 3, floeBreak: n >= 4 };
 }
 
 function stageAnnouncement(n: number): string {
@@ -199,7 +203,8 @@ function startPractice(): void {
   world = makeWorld(
     [...humans, { slot: botSlot, name: 'Coach Berg', color: PLAYER_COLORS[botSlot] }],
     Math.random,
-    { edgeDeath: true, floeBreak: false }, // splash allowed; we revive below
+    // bomb-free by default: pure driving. B summons/dismisses the bomb.
+    { bomb: false, edgeDeath: true, floeBreak: false },
   );
   const coach = world.penguins.find((p) => p.slot === botSlot)!;
   coach.isDummy = true;
@@ -208,19 +213,20 @@ function startPractice(): void {
       font-size:30px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);pointer-events:none">
       🎯 PRACTICE ARENA</div>
     <div style="position:fixed;bottom:18px;left:0;right:0;text-align:center;font-size:16px;
-      opacity:.75;pointer-events:none">practice bomb — nobody stays out · falling in respawns you ·
-      throw at Coach Berg · tune sliders on the right · <b>L</b> = back to lobby</div>`;
+      opacity:.75;pointer-events:none">free driving — falling in just respawns you ·
+      <b>B</b> = practice bomb on/off · tune sliders on the right · <b>L</b> = back to lobby</div>`;
   renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement);
   mountTunePanel(true);
   room.broadcast({ t: 'phase', phase: 'play' });
 
+  const gen = ++loopGen;
   let last = performance.now();
   const prevTaps = new Map<number, boolean>();
   let lastCarrier: number | undefined;
   let lastFuseSend = 0;
 
   const loop = (now: number): void => {
-    if (mode !== 'practice' || !world || !renderer || !room) return;
+    if (gen !== loopGen || mode !== 'practice' || !world || !renderer || !room) return;
     const dt = Math.min(now - last, 50);
     last = now;
     for (const c of room.controllers.values()) {
@@ -228,6 +234,7 @@ function startPractice(): void {
       if (!p || p.isDummy) continue;
       p.steer = c.steer;
       p.throttle = c.throttle;
+      p.move = c.move;
       if (c.tap && !prevTaps.get(c.slot)) p.tap = true;
       prevTaps.set(c.slot, c.tap);
     }
@@ -277,6 +284,12 @@ window.addEventListener('keydown', (e) => {
     room?.broadcast({ t: 'phase', phase: 'lobby' });
     document.getElementById('tune')?.remove();
     void renderLobby();
+  }
+  if (e.key.toLowerCase() === 'b' && mode === 'practice' && world) {
+    world.rules.bomb = !world.rules.bomb;
+    if (!world.rules.bomb) world.bomb = idleBomb(); // also clears any carrier
+    const b = document.getElementById('banner');
+    if (b) b.textContent = world.rules.bomb ? '💣 PRACTICE BOMB INCOMING' : '🎯 PRACTICE ARENA';
   }
 });
 
@@ -351,6 +364,7 @@ function startStage(): void {
   room.broadcast({ t: 'phase', phase: 'play' });
   setTimeout(() => { const b = document.getElementById('banner'); if (b) b.textContent = ''; }, isRuleStage ? 3400 : 1600);
 
+  const gen = ++loopGen; // kills any previous stage's loop
   let last = performance.now();
   let stageOver = false;
   const prevTaps = new Map<number, boolean>();
@@ -358,7 +372,7 @@ function startStage(): void {
   let lastFuseSend = 0;
 
   const loop = (now: number): void => {
-    if (mode !== 'play' || !world || !renderer || !room) return;
+    if (gen !== loopGen || mode !== 'play' || !world || !renderer || !room) return;
     const dt = Math.min(now - last, 50);
     last = now;
 
@@ -367,6 +381,7 @@ function startStage(): void {
       if (!p || p.isDummy) continue;
       p.steer = c.steer;
       p.throttle = c.throttle;
+      p.move = c.move;
       if (c.tap && !prevTaps.get(c.slot)) p.tap = true; // rising edge only
       prevTaps.set(c.slot, c.tap);
     }

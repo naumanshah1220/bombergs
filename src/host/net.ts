@@ -12,6 +12,7 @@ export type ControllerInfo = {
   steer: number;
   tap: boolean;
   throttle?: number; // gas-pedal mode: 0..1; undefined = auto-drive
+  move?: { x: number; y: number }; // joystick mode vector
   connected: boolean;
   lastSeen: number;
 };
@@ -78,6 +79,10 @@ export function createRoom(handlers: RoomHandlers, onReady: (room: Room) => void
         c.steer = Math.max(-1, Math.min(1, msg.steer));
         c.tap = msg.tap;
         c.throttle = msg.throttle === undefined ? undefined : Math.max(0, Math.min(1, msg.throttle));
+        c.move = msg.move === undefined ? undefined : {
+          x: Math.max(-1, Math.min(1, msg.move.x)),
+          y: Math.max(-1, Math.min(1, msg.move.y)),
+        };
         c.lastSeen = Date.now();
         if (!c.connected) { c.connected = true; handlers.onJoin(c); } // self-heal after a hiccup
         handlers.onInput(slot, c.steer, c.tap);
