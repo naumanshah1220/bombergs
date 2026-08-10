@@ -44,14 +44,23 @@ intuitive, and demo-able solo (bots).
 ### The bomb
 - Classic cartoon bomb: black sphere, lit fuse. The fuse is the only timer —
   it visibly burns down, sparking and beeping faster near the end; the bomb
-  pulses red. Fuse length randomized ~15–25s per life.
+  pulses red. Fuse length randomized ~12–18s per life (brackets Dota PTB's
+  15s "normal"; its fast modes run 5–10s — a future modifier).
 - **Carrier state:** +15% move speed, no ability use. The carrier's phone
   becomes the bomb: bomb graphic, accelerating tick from the phone speaker,
   escalating vibration (Android; iOS gets louder audio — no vibration API).
 - **Delivery:** a skua bird flies in and drops the bomb on a random living
   penguin at stage start and after any unclaimed ground explosion.
 
-### Passing (throw-to-stick)
+### Passing (throw-to-stick + contact)
+
+*(Revised 2026-08-10 after studying Dota 2 Pass The Bomb — toss at range,
+blink mind-games — and Roblox Bomb Tag — pass by touch, faster bomber:
+passing is now a hybrid of both.)*
+
+- **Contact pass:** the carrier can simply RAM another trolley to hand the
+  bomb over — with their speed boost, a cornered carrier is dangerous.
+  A raised Ice Shield holds the carrier off. No-tag-back applies.
 - The carrier projects a visible **pass radius** (red ring on the ice).
   Penguins inside it are highlighted as valid targets.
 - **Tap = throw** at the nearest highlighted target. The bomb arcs ~0.5s

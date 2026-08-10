@@ -7,6 +7,7 @@ import { PLAYER_COLORS, controllerUrl, type AbilityId } from '../shared/protocol
 import { fuseFrac } from '../sim/bomb';
 import { TUNE, type Tunables } from '../sim/constants';
 import { makeWorld, step, type World } from '../sim/world';
+import { Sfx } from './audio';
 import { Renderer } from './render';
 import { createRoom, type Room } from './net';
 
@@ -15,6 +16,7 @@ let room: Room | undefined;
 let mode: 'lobby' | 'play' = 'lobby';
 let world: World | undefined;
 let renderer: Renderer | undefined;
+let sfx: Sfx | undefined;
 
 const TARGET_POINTS = 3;
 type Score = { slot: number; name: string; color: string; score: number; isBot: boolean; ability?: AbilityId };
@@ -146,6 +148,8 @@ function startGame(): void {
   scores = players.map((p) => ({ slot: p.slot, name: p.name, color: p.color, score: 0, isBot: p.isBot }));
   stageNo = 0;
   mode = 'play';
+  sfx ??= new Sfx(); // constructed on the START click = user gesture
+  sfx.resume();
   mountTunePanel();
   startStage();
 }
@@ -249,10 +253,21 @@ function startStage(): void {
     const events = step(world, dt);
     renderer.addEvents(events, world);
     for (const e of events) {
-      if (e.kind === 'eliminated') {
-        const placement = world.penguins.filter((q) => q.alive).length + 1;
-        const s = scores.find((q) => q.slot === e.slot);
-        room.sendTo(e.slot, { t: 'status', alive: false, placement, score: s?.score ?? 0 });
+      switch (e.kind) {
+        case 'eliminated': {
+          const placement = world.penguins.filter((q) => q.alive).length + 1;
+          const s = scores.find((q) => q.slot === e.slot);
+          room.sendTo(e.slot, { t: 'status', alive: false, placement, score: s?.score ?? 0 });
+          break;
+        }
+        case 'explode': sfx?.explosion(); break;
+        case 'splash': sfx?.splash(); break;
+        case 'honk': sfx?.honk(); break;
+        case 'throw': sfx?.throwWhoosh(); break;
+        case 'stick': sfx?.stick(); break;
+        case 'blink': sfx?.blink(); break;
+        case 'shieldUp': sfx?.shield(); break;
+        case 'dash': sfx?.throwWhoosh(); break;
       }
     }
 
@@ -279,6 +294,7 @@ function startStage(): void {
       const winner = alive.length === 1 ? alive[0] : undefined;
       const ws = winner && scores.find((q) => q.slot === winner.slot);
       if (ws) ws.score++;
+      if (winner) sfx?.fanfare();
       renderScorebar();
       const champion = ws && ws.score >= TARGET_POINTS ? ws : undefined;
       const b = document.getElementById('banner');
