@@ -11,6 +11,7 @@ export type ControllerInfo = {
   color: string;
   steer: number;
   tap: boolean;
+  throttle?: number; // gas-pedal mode: 0..1; undefined = auto-drive
   connected: boolean;
   lastSeen: number;
 };
@@ -76,6 +77,7 @@ export function createRoom(handlers: RoomHandlers, onReady: (room: Room) => void
         if (!c) return;
         c.steer = Math.max(-1, Math.min(1, msg.steer));
         c.tap = msg.tap;
+        c.throttle = msg.throttle === undefined ? undefined : Math.max(0, Math.min(1, msg.throttle));
         c.lastSeen = Date.now();
         if (!c.connected) { c.connected = true; handlers.onJoin(c); } // self-heal after a hiccup
         handlers.onInput(slot, c.steer, c.tap);

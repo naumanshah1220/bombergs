@@ -399,7 +399,7 @@ export class Renderer {
       const a = spokeAngle(i);
       const wob = wobblePhase ? Math.sin(a * 5 + this.t * 2) * 3 : 0;
       const r = Math.max(f.radii[i] - inset + wob, 0);
-      const x = f.cx + Math.cos(a) * r;
+      const x = f.cx + Math.cos(a) * r * f.sx;
       const y = f.cy + Math.sin(a) * r;
       i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
     }
@@ -422,7 +422,7 @@ export class Renderer {
     c.restore();
     // surface
     this.floePath(c, f, 0);
-    const g = c.createRadialGradient(f.cx - 120, f.cy - 160, 60, f.cx, f.cy, TUNE.FLOE_RADIUS * 1.15);
+    const g = c.createRadialGradient(f.cx - 120, f.cy - 160, 60, f.cx, f.cy, TUNE.FLOE_RADIUS * f.sx * 1.15);
     g.addColorStop(0, '#ffffff');
     g.addColorStop(0.55, '#eef6fc');
     g.addColorStop(1, '#cfe3f2');
@@ -440,7 +440,7 @@ export class Renderer {
     for (const s of this.speckles) {
       const rr = radiusAt(f, s.a) * s.d * 0.92;
       c.beginPath();
-      c.arc(f.cx + Math.cos(s.a) * rr, f.cy + Math.sin(s.a) * rr, s.r, 0, Math.PI * 2);
+      c.arc(f.cx + Math.cos(s.a) * rr * f.sx, f.cy + Math.sin(s.a) * rr, s.r, 0, Math.PI * 2);
       c.fill();
     }
     c.strokeStyle = 'rgba(160, 200, 225, .3)';

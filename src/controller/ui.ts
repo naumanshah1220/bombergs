@@ -3,10 +3,14 @@
 
 import type { AbilityId } from '../shared/protocol';
 
+export type DriveScheme = 'auto' | 'gas';
+
 export type UiHandlers = {
   onJoin(name: string): void;
   onCalibrateTap(): void;
   onAction(pressed: boolean): void;
+  onThrottle(pressed: boolean): void;
+  onSchemeToggle(): void;
   onDraftPick(index: 0 | 1 | 2): void;
   onSimAngle?(deg: number): void;
 };
@@ -97,12 +101,60 @@ export class ControllerUi {
     });
   }
 
-  showPlay(name: string, ability?: AbilityId): void {
+  /** Small persistent chip for flipping between auto-drive and gas-pedal. */
+  private schemeChip(scheme: DriveScheme): string {
+    return `<button id="schemebtn" style="position:absolute;top:12px;left:12px;font-size:13px;
+      padding:7px 12px;border-radius:10px;border:2px solid rgba(0,0,0,.3);
+      background:rgba(255,255,255,.35);color:#04121f;font-weight:700">
+      ⚙ ${scheme === 'auto' ? 'AUTO-DRIVE' : 'GAS PEDAL'}</button>`;
+  }
+
+  private bindSchemeChip(): void {
+    document.getElementById('schemebtn')?.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      this.handlers.onSchemeToggle();
+    });
+  }
+
+  /** Gas-pedal layout: ACTION on the left thumb, GAS on the right thumb. */
+  private sideButtons(actionLabel: string): string {
+    const btn = (id: string, side: string, label: string, color: string) => `
+      <button id="${id}" style="position:absolute;${side}:4vw;top:50%;transform:translateY(-50%);
+        width:29vmin;height:29vmin;border-radius:50%;font-size:19px;font-weight:800;
+        border:6px solid rgba(0,0,0,.3);background:${color};color:#04121f;
+        touch-action:none;transition:filter .06s">${label}</button>`;
+    return btn('sideact', 'left', actionLabel, 'rgba(255,255,255,.85)')
+      + btn('gas', 'right', '🔥<div style="font-size:15px">GAS</div>', 'rgba(255,214,90,.92)');
+  }
+
+  private bindSideButtons(): void {
+    const wire = (id: string, fn: (down: boolean) => void) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const press = (down: boolean) => (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.style.filter = down ? 'brightness(.8)' : '';
+        fn(down);
+      };
+      el.addEventListener('pointerdown', press(true));
+      el.addEventListener('pointerup', press(false));
+      el.addEventListener('pointercancel', press(false));
+    };
+    wire('gas', (d) => this.handlers.onThrottle(d));
+    wire('sideact', (d) => { if (d) this.blip(340, 0.1); this.handlers.onAction(d); });
+  }
+
+  showPlay(name: string, ability?: AbilityId, scheme: DriveScheme = 'auto'): void {
     // The wheel is the feedback: it rotates exactly as much as the game
     // thinks you're steering, so grip direction is self-teaching.
     const a = ability ? ABILITY_INFO[ability] : undefined;
     const btnLabel = a ? `${a.icon}<div style="font-size:14px">${a.name.toUpperCase()}</div>` : 'HONK';
-    const hint = a ? `tilt to steer · tap anywhere for ${a.name}` : 'tilt to steer · tap anywhere to honk';
+    const actionWord = a ? a.name : 'honk';
+    const hint = scheme === 'gas'
+      ? `tilt to steer · right thumb gas · left thumb ${actionWord}`
+      : `tilt to steer · tap anywhere for ${actionWord}`;
     this.base(this.color, `
       <div id="flat" style="position:absolute;top:24px;font-size:15px;color:#04121f;
         font-weight:700;visibility:hidden">📱 Lift your handlebar!</div>
@@ -121,10 +173,14 @@ export class ControllerUi {
           background:rgba(255,255,255,.88);color:#04121f;font-weight:800;
           pointer-events:none;transition:transform .08s">${btnLabel}</button>
       </div>
-      <div style="font-size:14px;color:#04121f;opacity:.55">${hint}</div>`);
+      <div style="font-size:14px;color:#04121f;opacity:.55">${hint}</div>
+      ${this.schemeChip(scheme)}
+      ${scheme === 'gas' ? this.sideButtons(btnLabel) : ''}`);
     this.wheel = this.root.querySelector('#wheel')!;
     this.flatNudge = this.root.querySelector('#flat')!;
-    this.bindTapAnywhere(() => this.blip(340, 0.12));
+    this.bindSchemeChip();
+    if (scheme === 'gas') this.bindSideButtons();
+    else this.bindTapAnywhere(() => this.blip(340, 0.12));
   }
 
   /**
@@ -151,15 +207,20 @@ export class ControllerUi {
     if (this.flatNudge) this.flatNudge.style.visibility = flat ? 'visible' : 'hidden';
   }
 
-  showBomb(): void {
+  showBomb(scheme: DriveScheme = 'auto'): void {
     this.base('#120607', `
       <div id="bombface" style="font-size:110px;transition:transform .1s">💣</div>
       <div style="font-size:24px;font-weight:800;color:#ff5a5f">YOU HAVE THE BOMB</div>
-      <button id="act" style="font-size:26px;padding:20px 48px;border-radius:16px;
+      ${scheme === 'auto' ? `<button id="act" style="font-size:26px;padding:20px 48px;border-radius:16px;
         border:4px solid #ff5a5f;background:#2a0d10;color:#fff;font-weight:800;
-        pointer-events:none;transition:transform .08s">THROW</button>
-      <div style="font-size:15px;opacity:.6">get close to someone… tap anywhere to throw!</div>`);
-    this.bindTapAnywhere();
+        pointer-events:none;transition:transform .08s">THROW</button>` : ''}
+      <div style="font-size:15px;opacity:.6">get close to someone…
+        ${scheme === 'gas' ? 'left thumb throws!' : 'tap anywhere to throw!'}</div>
+      ${this.schemeChip(scheme)}
+      ${scheme === 'gas' ? this.sideButtons('💣<div style="font-size:15px">THROW</div>') : ''}`);
+    this.bindSchemeChip();
+    if (scheme === 'gas') this.bindSideButtons();
+    else this.bindTapAnywhere();
     this.wheel = undefined;
     this.flatNudge = undefined;
   }

@@ -4,8 +4,8 @@
 import { abilityTick, useAbility } from './abilities';
 import { bombStep, carrierSlot, idleBomb, type BombState } from './bomb';
 import { botInputs } from './bots';
-import { ARENA_H, ARENA_W, FLOE_WOBBLE, TUNE } from './constants';
-import { contains, makeFloe, radiusAt, type Floe, type Vec2 } from './floe';
+import { ARENA_H, ARENA_W, FLOE_SCALE_X, FLOE_WOBBLE, TUNE } from './constants';
+import { contains, makeFloe, radiusAt, toFloeSpace, type Floe, type Vec2 } from './floe';
 import type { AbilityId } from '../shared/protocol';
 
 export type Penguin = {
@@ -17,6 +17,7 @@ export type Penguin = {
   vel: Vec2;
   steer: number;     // [-1, 1] latest input
   tap: boolean;      // consumed by abilities / the bomb machine each step
+  throttle?: number; // gas-pedal scheme: 0..1; undefined = auto-drive (full)
   speedMult: number;
   alive: boolean;
   isDummy: boolean;  // bot-driven
@@ -60,7 +61,7 @@ export function makeWorld(
   rand: () => number = Math.random,
   rules: StageRules = DEFAULT_RULES,
 ): World {
-  const floe = makeFloe(ARENA_W / 2, ARENA_H / 2, TUNE.FLOE_RADIUS, FLOE_WOBBLE, rand);
+  const floe = makeFloe(ARENA_W / 2, ARENA_H / 2, TUNE.FLOE_RADIUS, FLOE_WOBBLE, rand, FLOE_SCALE_X);
   const penguins = players.map((p, i) => {
     const angle = (i / players.length) * Math.PI * 2;
     const r = TUNE.FLOE_RADIUS * 0.55;
@@ -68,7 +69,7 @@ export function makeWorld(
       slot: p.slot,
       name: p.name,
       color: p.color,
-      pos: { x: floe.cx + Math.cos(angle) * r, y: floe.cy + Math.sin(angle) * r },
+      pos: { x: floe.cx + Math.cos(angle) * r * floe.sx, y: floe.cy + Math.sin(angle) * r },
       heading: angle + Math.PI, // face inward
       vel: { x: 0, y: 0 },
       steer: 0,
@@ -97,9 +98,10 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     }
 
     p.heading += p.steer * TUNE.TURN_RATE * dt;
+    const power = TUNE.BASE_SPEED * p.speedMult * (p.throttle ?? 1);
     const thrust = {
-      x: Math.cos(p.heading) * TUNE.BASE_SPEED * p.speedMult,
-      y: Math.sin(p.heading) * TUNE.BASE_SPEED * p.speedMult,
+      x: Math.cos(p.heading) * power,
+      y: Math.sin(p.heading) * power,
     };
     const k = Math.min(TUNE.ICE_GRIP * dt, 1);
     p.vel.x += (thrust.x - p.vel.x) * k;
@@ -142,19 +144,24 @@ export function step(w: World, dtMs: number): WorldEvent[] {
         events.push({ kind: 'splash', slot: p.slot, at: { ...p.pos } });
         events.push({ kind: 'eliminated', slot: p.slot });
       } else {
-        // push back inside and reflect the outward velocity component
-        const dx = p.pos.x - w.floe.cx;
-        const dy = p.pos.y - w.floe.cy;
-        const dist = Math.hypot(dx, dy) || 0.001;
-        const nx = dx / dist;
-        const ny = dy / dist;
-        const rim = radiusAt(w.floe, Math.atan2(dy, dx)) - 4;
-        p.pos.x = w.floe.cx + nx * rim;
+        // push back inside (floe space) and reflect the outward velocity
+        const q = toFloeSpace(w.floe, p.pos);
+        const dist = Math.hypot(q.x, q.y) || 0.001;
+        const nx = q.x / dist;
+        const ny = q.y / dist;
+        const rim = radiusAt(w.floe, Math.atan2(q.y, q.x)) - 4;
+        p.pos.x = w.floe.cx + nx * rim * w.floe.sx;
         p.pos.y = w.floe.cy + ny * rim;
-        const vOut = p.vel.x * nx + p.vel.y * ny;
+        // ellipse surface normal in world space
+        let nwx = nx / w.floe.sx;
+        let nwy = ny;
+        const nl = Math.hypot(nwx, nwy) || 0.001;
+        nwx /= nl;
+        nwy /= nl;
+        const vOut = p.vel.x * nwx + p.vel.y * nwy;
         if (vOut > 0) {
-          p.vel.x -= vOut * 1.5 * nx; // reflect half of it back inward
-          p.vel.y -= vOut * 1.5 * ny;
+          p.vel.x -= vOut * 1.5 * nwx; // reflect half of it back inward
+          p.vel.y -= vOut * 1.5 * nwy;
           if (vOut > 60) events.push({ kind: 'bounce', slot: p.slot, at: { ...p.pos } });
         }
       }

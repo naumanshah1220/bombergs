@@ -12,6 +12,13 @@ describe('makeFloe / contains', () => {
     expect(contains(f, { x: 400, y: 0 })).toBe(false);
     expect(contains(f, { x: 0, y: -350 })).toBe(false);
   });
+
+  it('stretches horizontally into a wide berg', () => {
+    const f = makeFloe(0, 0, 300, 0.1, rand, 1.5); // radius 300, width 450
+    expect(contains(f, { x: 420, y: 0 })).toBe(true);   // wide axis reaches
+    expect(contains(f, { x: 0, y: 420 })).toBe(false);  // tall axis does not
+    expect(contains(f, { x: 0, y: 280 })).toBe(true);
+  });
 });
 
 describe('breakChunk', () => {

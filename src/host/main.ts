@@ -208,36 +208,62 @@ function startPractice(): void {
       font-size:30px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);pointer-events:none">
       🎯 PRACTICE ARENA</div>
     <div style="position:fixed;bottom:18px;left:0;right:0;text-align:center;font-size:16px;
-      opacity:.75;pointer-events:none">no bombs · falling in just respawns you ·
-      tune sliders on the right · <b>L</b> = back to lobby</div>`;
+      opacity:.75;pointer-events:none">practice bomb — nobody stays out · falling in respawns you ·
+      throw at Coach Berg · tune sliders on the right · <b>L</b> = back to lobby</div>`;
   renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement);
   mountTunePanel(true);
   room.broadcast({ t: 'phase', phase: 'play' });
 
   let last = performance.now();
+  const prevTaps = new Map<number, boolean>();
+  let lastCarrier: number | undefined;
+  let lastFuseSend = 0;
+
   const loop = (now: number): void => {
     if (mode !== 'practice' || !world || !renderer || !room) return;
     const dt = Math.min(now - last, 50);
     last = now;
     for (const c of room.controllers.values()) {
       const p = world.penguins.find((q) => q.slot === c.slot);
-      if (p && !p.isDummy) p.steer = c.steer;
+      if (!p || p.isDummy) continue;
+      p.steer = c.steer;
+      p.throttle = c.throttle;
+      if (c.tap && !prevTaps.get(c.slot)) p.tap = true;
+      prevTaps.set(c.slot, c.tap);
     }
     const events = step(world, dt);
-    // no deaths here: anyone who splashes climbs right back on
+    // no deaths here: splashes, blasts — everyone climbs right back on
     renderer.addEvents(events.filter((e) => e.kind !== 'eliminated' && e.kind !== 'launched'), world);
     for (const e of events) {
-      if (e.kind === 'splash') {
-        sfx?.splash();
-        const p = world.penguins.find((q) => q.slot === e.slot);
-        if (p) {
-          p.alive = true;
-          p.pos = { x: world.floe.cx, y: world.floe.cy };
-          p.vel = { x: 0, y: 0 };
+      switch (e.kind) {
+        case 'eliminated': {
+          const p = world.penguins.find((q) => q.slot === e.slot);
+          if (p) {
+            p.alive = true;
+            p.pos = { x: world.floe.cx, y: world.floe.cy };
+            p.vel = { x: 0, y: 0 };
+          }
+          break;
         }
+        case 'splash': sfx?.splash(); break;
+        case 'explode': sfx?.explosion(); break;
+        case 'honk': sfx?.honk(); break;
+        case 'throw': sfx?.throwWhoosh(); break;
+        case 'stick': sfx?.stick(); break;
+        case 'bounce': sfx?.stick(); break;
       }
-      if (e.kind === 'honk') sfx?.honk();
-      if (e.kind === 'bounce') sfx?.stick();
+    }
+    // carrier phone still becomes the bomb in practice — that's the point
+    const carrier = world.bomb.s === 'carried' ? world.bomb.slot : undefined;
+    const frac = fuseFrac(world.bomb);
+    if (carrier !== lastCarrier) {
+      if (lastCarrier !== undefined) room.sendTo(lastCarrier, { t: 'bomb', carrying: false, fuseFrac: 0 });
+      if (carrier !== undefined) room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
+      lastCarrier = carrier;
+      lastFuseSend = now;
+    } else if (carrier !== undefined && now - lastFuseSend > 250) {
+      room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
+      lastFuseSend = now;
     }
     renderer.draw(world, dt);
     requestAnimationFrame(loop);
@@ -340,6 +366,7 @@ function startStage(): void {
       const p = world.penguins.find((q) => q.slot === c.slot);
       if (!p || p.isDummy) continue;
       p.steer = c.steer;
+      p.throttle = c.throttle;
       if (c.tap && !prevTaps.get(c.slot)) p.tap = true; // rising edge only
       prevTaps.set(c.slot, c.tap);
     }

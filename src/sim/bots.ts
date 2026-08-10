@@ -5,7 +5,7 @@
 //   4. Otherwise wander.
 
 import { BOMB, carrierSlot } from './bomb';
-import { radiusAt } from './floe';
+import { marginAt } from './floe';
 import type { Penguin, World } from './world';
 
 export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean } {
@@ -75,11 +75,11 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean }
 /** Hard override when the ice ahead runs out; undefined when safe. */
 function edgeAvoid(w: World, p: Penguin): number | undefined {
   const lookAhead = 110;
-  const fx = p.pos.x + Math.cos(p.heading) * lookAhead;
-  const fy = p.pos.y + Math.sin(p.heading) * lookAhead;
-  const dx = fx - w.floe.cx;
-  const dy = fy - w.floe.cy;
-  const margin = radiusAt(w.floe, Math.atan2(dy, dx)) - Math.hypot(dx, dy);
+  const ahead = {
+    x: p.pos.x + Math.cos(p.heading) * lookAhead,
+    y: p.pos.y + Math.sin(p.heading) * lookAhead,
+  };
+  const margin = marginAt(w.floe, ahead);
   if (margin >= 50) return undefined;
   const toCenter = Math.atan2(w.floe.cy - p.pos.y, w.floe.cx - p.pos.x);
   return turnToward(p.heading, toCenter);

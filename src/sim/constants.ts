@@ -14,6 +14,7 @@ export const C = {
 export type Tunables = { -readonly [K in keyof typeof C]: number };
 export const TUNE = C as Tunables;
 
+export const FLOE_SCALE_X = 1.55;       // horizontal stretch: wide berg, thin side margins
 export const FLOE_WOBBLE = 0.12;        // fraction of radius randomized per spoke
 export const FLOE_SPOKES = 64;          // star-polygon resolution
 export const FLOE_MIN_AREA_FRAC = 0.12; // floe never shrinks below this fraction

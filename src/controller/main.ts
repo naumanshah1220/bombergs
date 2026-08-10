@@ -5,7 +5,7 @@ import Peer, { type DataConnection } from 'peerjs';
 import { hostPeerId, type AbilityId, type C2H, type H2C } from '../shared/protocol';
 import { FLAT_LIMIT, flatness, makeSteer, rollFromGravity } from '../shared/steer';
 import { requestMotionPermission, startRealSensors, startSimSensors, type SensorSource } from './sensors';
-import { ControllerUi } from './ui';
+import { ControllerUi, type DriveScheme } from './ui';
 
 const params = new URLSearchParams(location.search);
 const room = (params.get('room') ?? '').toUpperCase();
@@ -21,6 +21,8 @@ let playerName = 'Penguin';
 let carrying = false;
 let lastOffer: AbilityId[] = [];
 let myAbility: AbilityId | undefined;
+let scheme: DriveScheme = (localStorage.getItem('bombergs-scheme') as DriveScheme) || 'auto';
+let gasHeld = false;
 
 const ui = new ControllerUi(app, {
   onJoin(name) {
@@ -42,11 +44,22 @@ const ui = new ControllerUi(app, {
     // settle 400ms, then capture neutral grip
     await new Promise((r) => setTimeout(r, 400));
     steerFn = makeSteer(rollFromGravity(sensors!.gravity()));
-    ui.showPlay(playerName, myAbility);
+    ui.showPlay(playerName, myAbility, scheme);
   },
   onAction(pressed) {
     if (pressed && !tapHeld) tapQueued = true;
     tapHeld = pressed;
+  },
+  onThrottle(pressed) {
+    gasHeld = pressed;
+  },
+  onSchemeToggle() {
+    scheme = scheme === 'auto' ? 'gas' : 'auto';
+    localStorage.setItem('bombergs-scheme', scheme);
+    gasHeld = false;
+    // re-render whichever driving screen we're on
+    if (carrying) ui.showBomb(scheme);
+    else if (steerFn) ui.showPlay(playerName, myAbility, scheme);
   },
   onDraftPick(index) {
     myAbility = lastOffer[index];
@@ -80,14 +93,14 @@ function handleHostMessage(msg: H2C): void {
     case 'phase':
       if (msg.phase === 'calibrate') ui.showCalibrate(simMode);
       // New stage: anyone calibrated returns to the wheel (revives the dead)
-      if (msg.phase === 'play' && steerFn) { carrying = false; ui.stopFuse(); ui.showPlay(playerName, myAbility); }
+      if (msg.phase === 'play' && steerFn) { carrying = false; ui.stopFuse(); ui.showPlay(playerName, myAbility, scheme); }
       if (msg.phase === 'play' && !steerFn) ui.showCalibrate(simMode);
       if (msg.phase === 'gameover') ui.showWaiting('Match over! Check the big screen 🏆');
       if (msg.phase === 'lobby') ui.showWaiting('Back in the lobby — next match soon!');
       break;
     case 'bomb':
-      if (msg.carrying && !carrying) ui.showBomb();
-      if (!msg.carrying && carrying) { ui.stopFuse(); ui.showPlay(playerName, myAbility); }
+      if (msg.carrying && !carrying) ui.showBomb(scheme);
+      if (!msg.carrying && carrying) { ui.stopFuse(); ui.showPlay(playerName, myAbility, scheme); }
       carrying = msg.carrying;
       if (carrying) ui.setFuse(msg.fuseFrac);
       break;
@@ -133,7 +146,12 @@ setInterval(() => {
     flat = !sensors.sim && flatness(g) > FLAT_LIMIT;
     ui.updatePlay(steer, flat);
   }
-  send({ t: 'input', steer: flat ? 0 : steer, tap: tapQueued || tapHeld });
+  send({
+    t: 'input',
+    steer: flat ? 0 : steer,
+    tap: tapQueued || tapHeld,
+    throttle: scheme === 'gas' ? (gasHeld ? 1 : 0) : undefined,
+  });
   tapQueued = false;
 }, 20); // 50Hz — input latency budget matters more than bandwidth here
 
