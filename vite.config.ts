@@ -31,7 +31,9 @@ function lanIp(): string | null {
 export default defineConfig(({ mode }) => ({
   plugins: mode === 'phone' ? [basicSsl()] : [],
   define: { __LAN_HOST__: JSON.stringify(lanIp()) },
-  server: { host: true, port: 5173 },
+  // allowedHosts: vite rejects unknown Host headers; the tunnel hostname is
+  // random per run, so allow the whole trycloudflare.com suffix.
+  server: { host: true, port: 5173, allowedHosts: ['.trycloudflare.com'] },
   build: {
     rollupOptions: {
       input: {
