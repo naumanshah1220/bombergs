@@ -4,6 +4,7 @@
 
 import QRCode from 'qrcode';
 import { PLAYER_COLORS, controllerUrl } from '../shared/protocol';
+import { fuseFrac } from '../sim/bomb';
 import { TUNE, type Tunables } from '../sim/constants';
 import { makeWorld, step, type World } from '../sim/world';
 import { Renderer } from './render';
@@ -14,6 +15,11 @@ let room: Room | undefined;
 let mode: 'lobby' | 'play' = 'lobby';
 let world: World | undefined;
 let renderer: Renderer | undefined;
+
+const TARGET_POINTS = 3;
+type Score = { slot: number; name: string; color: string; score: number; isBot: boolean };
+let scores: Score[] = [];
+let stageNo = 0;
 
 function boot(): void {
   app.innerHTML = `<div style="display:grid;place-items:center;height:100%">
@@ -121,64 +127,130 @@ function mountTunePanel(): void {
 }
 
 function startGame(): void {
+  // Fresh match from the lobby: build the roster and zero the scores.
   if (!room) return;
-  mode = 'play';
-  mountTunePanel();
   const players = [...room.controllers.values()]
     .filter((c) => c.connected)
-    .map((c) => ({ slot: c.slot, name: c.name, color: c.color }));
-  // fill to 4 with circling dummies (real bots arrive with the bomb loop)
-  const dummies: { slot: number; name: string; color: string; isDummy: boolean }[] = [];
+    .map((c) => ({ slot: c.slot, name: c.name, color: c.color, isBot: false }));
   const taken = new Set(players.map((p) => p.slot));
-  for (let i = 0; players.length + dummies.length < 4 && i < PLAYER_COLORS.length; i++) {
+  for (let i = 0; players.length < 4 && i < PLAYER_COLORS.length; i++) {
     if (taken.has(i)) continue;
-    dummies.push({ slot: i, name: DUMMY_NAMES[dummies.length] ?? `Bot ${i}`, color: PLAYER_COLORS[i], isDummy: true });
+    const botCount = players.filter((p) => p.isBot).length;
+    players.push({ slot: i, name: DUMMY_NAMES[botCount] ?? `Bot ${i}`, color: PLAYER_COLORS[i], isBot: true });
+    taken.add(i);
   }
-  world = makeWorld([...players, ...dummies]);
+  scores = players.map((p) => ({ slot: p.slot, name: p.name, color: p.color, score: 0, isBot: p.isBot }));
+  stageNo = 0;
+  mode = 'play';
+  mountTunePanel();
+  startStage();
+}
+
+function renderScorebar(): void {
+  const bar = document.getElementById('scorebar');
+  if (!bar) return;
+  bar.innerHTML = [...scores]
+    .sort((a, b) => b.score - a.score)
+    .map((s) => `<span style="background:rgba(6,12,30,.72);border-left:5px solid ${s.color};
+        padding:5px 12px;border-radius:8px;margin-right:8px;font-weight:700">
+        ${s.name} ${'●'.repeat(s.score)}${'○'.repeat(Math.max(TARGET_POINTS - s.score, 0))}</span>`)
+    .join('');
+}
+
+function startStage(): void {
+  if (!room) return;
+  stageNo++;
+  world = makeWorld(scores.map((s) => ({ slot: s.slot, name: s.name, color: s.color, isDummy: s.isBot })));
   app.innerHTML = `<canvas id="arena" style="width:100%;height:100%;display:block"></canvas>
-    <div id="banner" style="position:fixed;top:30px;left:0;right:0;text-align:center;
+    <div id="scorebar" style="position:fixed;top:14px;left:16px;font-size:15px;pointer-events:none"></div>
+    <div id="banner" style="position:fixed;top:80px;left:0;right:0;text-align:center;
       font-size:40px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);
-      pointer-events:none">GO!</div>`;
+      pointer-events:none">STAGE ${stageNo}</div>`;
+  renderScorebar();
   renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement);
   room.broadcast({ t: 'phase', phase: 'play' });
-  setTimeout(() => { const b = document.getElementById('banner'); if (b) b.textContent = ''; }, 1200);
+  setTimeout(() => { const b = document.getElementById('banner'); if (b) b.textContent = ''; }, 1600);
 
   let last = performance.now();
   let stageOver = false;
+  const prevTaps = new Map<number, boolean>();
+  let lastCarrier: number | undefined;
+  let lastFuseSend = 0;
+
   const loop = (now: number): void => {
     if (mode !== 'play' || !world || !renderer || !room) return;
     const dt = Math.min(now - last, 50);
     last = now;
+
     for (const c of room.controllers.values()) {
       const p = world.penguins.find((q) => q.slot === c.slot);
-      if (p && !p.isDummy) p.steer = c.steer;
+      if (!p || p.isDummy) continue;
+      p.steer = c.steer;
+      if (c.tap && !prevTaps.get(c.slot)) p.tap = true; // rising edge only
+      prevTaps.set(c.slot, c.tap);
     }
+
     const events = step(world, dt);
     renderer.addEvents(events, world);
     for (const e of events) {
       if (e.kind === 'eliminated') {
         const placement = world.penguins.filter((q) => q.alive).length + 1;
-        room.sendTo(e.slot, { t: 'status', alive: false, placement, score: 0 });
+        const s = scores.find((q) => q.slot === e.slot);
+        room.sendTo(e.slot, { t: 'status', alive: false, placement, score: s?.score ?? 0 });
       }
     }
+
+    // Phone-becomes-the-bomb: notify carrier changes + fuse progress at 4Hz.
+    const carrier = world.bomb.s === 'carried' ? world.bomb.slot : undefined;
+    const frac = fuseFrac(world.bomb);
+    if (carrier !== lastCarrier) {
+      if (lastCarrier !== undefined) room.sendTo(lastCarrier, { t: 'bomb', carrying: false, fuseFrac: 0 });
+      if (carrier !== undefined) room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
+      lastCarrier = carrier;
+      lastFuseSend = now;
+    } else if (carrier !== undefined && now - lastFuseSend > 250) {
+      room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
+      lastFuseSend = now;
+    }
+
     // Stage ends when one penguin remains — or when every HUMAN is out
-    // (nobody wants to spectate bots forever). Auto-restarts either way.
+    // (nobody wants to spectate bots forever).
     const alive = world.penguins.filter((q) => q.alive);
     const humansAlive = alive.filter((q) => !q.isDummy).length;
     const hadHumans = world.penguins.some((q) => !q.isDummy);
     if (!stageOver && (alive.length <= 1 || (hadHumans && humansAlive === 0))) {
       stageOver = true;
-      const b = document.getElementById('banner');
       const winner = alive.length === 1 ? alive[0] : undefined;
+      const ws = winner && scores.find((q) => q.slot === winner.slot);
+      if (ws) ws.score++;
+      renderScorebar();
+      const champion = ws && ws.score >= TARGET_POINTS ? ws : undefined;
+      const b = document.getElementById('banner');
       if (b) {
-        b.innerHTML = `${winner ? `${winner.name} WINS THE STAGE! 🏆` : 'EVERYONE IS SWIMMING 🌊'}<br/>
-          <span style="font-size:20px;opacity:.8">next stage in 3…</span>`;
+        if (champion) {
+          const standings = [...scores].sort((x, z) => z.score - x.score)
+            .map((s, i) => `${i === 0 ? '🏆' : ['🥈', '🥉', '4.'][i - 1] ?? `${i + 1}.`} ${s.name} — ${s.score}`)
+            .join('<br/>');
+          b.innerHTML = `<span style="font-size:52px">${champion.name} WINS THE MATCH!</span><br/>
+            <span style="font-size:24px;line-height:1.6">${standings}</span><br/>
+            <span style="font-size:18px;opacity:.7">back to the lobby in a moment…</span>`;
+        } else {
+          b.innerHTML = `${winner ? `${winner.name} takes the stage! 🏆` : 'EVERYONE IS SWIMMING 🌊'}<br/>
+            <span style="font-size:20px;opacity:.8">next stage in 3…</span>`;
+        }
       }
-      if (winner && !winner.isDummy) {
-        room.sendTo(winner.slot, { t: 'status', alive: false, placement: 1, score: 1 });
+      if (champion) {
+        room.broadcast({ t: 'phase', phase: 'gameover' });
+        setTimeout(() => {
+          mode = 'lobby';
+          room?.broadcast({ t: 'phase', phase: 'lobby' });
+          void renderLobby();
+        }, 8000);
+      } else {
+        setTimeout(() => { if (mode === 'play') startStage(); }, 3000);
       }
-      setTimeout(() => { if (mode === 'play') startGame(); }, 3000);
     }
+
     renderer.draw(world, dt);
     requestAnimationFrame(loop);
   };

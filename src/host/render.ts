@@ -8,13 +8,15 @@
 // bobbing ice cubes → penguins (shadow, trolley, bird, scarf) with snow spray
 // and motion trails → vignette.
 
+import { BOMB, fuseFrac } from '../sim/bomb';
 import { ARENA_H, ARENA_W, TUNE } from '../sim/constants';
 import { spokeAngle, radiusAt, type Floe } from '../sim/floe';
 import type { Penguin, World, WorldEvent } from '../sim/world';
 
 type Splash = { x: number; y: number; age: number };
 type Cube = { x: number; y: number; born: number; color: string };
-type Spray = { x: number; y: number; vx: number; vy: number; age: number };
+type Spray = { x: number; y: number; vx: number; vy: number; age: number; color?: string };
+type Shockwave = { x: number; y: number; age: number };
 
 const rand = (seed: number) => {
   // deterministic decorations: mulberry32
@@ -35,6 +37,9 @@ export class Renderer {
   private splashes: Splash[] = [];
   private cubes: Cube[] = [];
   private spray: Spray[] = [];
+  private shockwaves: Shockwave[] = [];
+  private shake = 0;
+  private flash = 0;
   private stars: { x: number; y: number; r: number; tw: number }[] = [];
   private speckles: { a: number; d: number; r: number }[] = []; // polar, relative
   private t = 0;
@@ -66,6 +71,31 @@ export class Renderer {
         const p = world.penguins.find((q) => q.slot === e.slot);
         this.cubes.push({ x: e.at.x, y: e.at.y, born: this.t, color: p?.color ?? '#fff' });
       }
+      if (e.kind === 'explode') {
+        this.shake = 1;
+        this.flash = 0.35;
+        this.shockwaves.push({ x: e.at.x, y: e.at.y, age: 0 });
+        for (let i = 0; i < 30; i++) {
+          const a = (i / 30) * Math.PI * 2;
+          const v = 180 + Math.random() * 260;
+          this.spray.push({
+            x: e.at.x, y: e.at.y,
+            vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+            age: -0.1,
+            color: i % 3 === 0 ? '#ffb400' : i % 3 === 1 ? '#ff6a3d' : '#ffffff',
+          });
+        }
+      }
+      if (e.kind === 'launched') {
+        // blasted skyward: their cube splashes down a beat later, further out
+        const p = world.penguins.find((q) => q.slot === e.slot);
+        this.cubes.push({
+          x: e.at.x + (Math.random() - 0.5) * 260,
+          y: e.at.y + (Math.random() - 0.5) * 260,
+          born: this.t + 0.9,
+          color: p?.color ?? '#fff',
+        });
+      }
     }
   }
 
@@ -90,7 +120,17 @@ export class Renderer {
       );
     }
     target.scale(scale, scale);
+    if (this.shake > 0) {
+      this.shake = Math.max(0, this.shake - dtMs / 400);
+      const amp = this.shake * 16;
+      target.translate((Math.random() - 0.5) * amp, (Math.random() - 0.5) * amp);
+    }
     this.scene(target, w, dtMs);
+    if (this.flash > 0) {
+      this.flash = Math.max(0, this.flash - dtMs / 1000);
+      target.fillStyle = `rgba(255, 240, 220, ${this.flash * 2})`;
+      target.fillRect(0, 0, ARENA_W, ARENA_H);
+    }
     target.restore();
 
     if (this.retro) {
@@ -117,7 +157,163 @@ export class Renderer {
     this.updateSpray(c, dtMs);
     const sorted = [...w.penguins].filter((p) => p.alive).sort((a, b) => a.pos.y - b.pos.y);
     for (const p of sorted) this.penguin(c, p);
+    this.bombLayer(c, w);
+    this.updateShockwaves(c, dtMs);
     this.vignette(c);
+  }
+
+  private bombLayer(c: CanvasRenderingContext2D, w: World): void {
+    const b = w.bomb;
+    const frac = fuseFrac(b);
+
+    if (b.s === 'delivering') {
+      const target = w.penguins.find((p) => p.slot === b.toSlot);
+      if (!target) return;
+      const t = Math.min(b.t / BOMB.SKUA_MS, 1);
+      const sx = target.pos.x + (1 - t) * 320;
+      const sy = target.pos.y - 90 - (1 - t) * 420;
+      // exclamation over the chosen one
+      c.font = 'bold 44px "Segoe UI", sans-serif';
+      c.textAlign = 'center';
+      c.fillStyle = '#ff5a5f';
+      c.fillText('!', target.pos.x, target.pos.y - 58 - Math.abs(Math.sin(this.t * 8)) * 10);
+      this.skua(c, sx, sy);
+      this.bombSprite(c, sx + 6, sy + 34, 0.8, 0);
+      return;
+    }
+
+    if (b.s === 'carried') {
+      const me = w.penguins.find((p) => p.slot === b.slot);
+      if (!me) return;
+      // pass radius ring, rotating dashes, angrier as fuse burns
+      c.save();
+      c.translate(me.pos.x, me.pos.y);
+      c.rotate(this.t * 0.7);
+      c.setLineDash([26, 18]);
+      c.lineWidth = 5;
+      c.strokeStyle = `rgba(255, ${Math.round(120 - frac * 90)}, 90, ${0.5 + frac * 0.4})`;
+      c.beginPath();
+      c.arc(0, 0, BOMB.PASS_RADIUS, 0, Math.PI * 2);
+      c.stroke();
+      c.restore();
+      const pulse = 1 + Math.sin(this.t * (4 + frac * 14)) * 0.08 * (0.5 + frac);
+      this.bombSprite(c, me.pos.x, me.pos.y - TUNE.PENGUIN_RADIUS * 1.6, pulse, frac);
+      return;
+    }
+
+    if (b.s === 'flying') {
+      const x = b.from.x + (b.to.x - b.from.x) * b.t01;
+      const y = b.from.y + (b.to.y - b.from.y) * b.t01;
+      const h = Math.sin(Math.PI * Math.min(b.t01, 1)) * 130;
+      // landing reticle — the dodge telegraph
+      c.save();
+      c.setLineDash([8, 8]);
+      c.lineWidth = 4;
+      c.strokeStyle = 'rgba(255, 90, 95, .85)';
+      c.beginPath();
+      c.arc(b.to.x, b.to.y, BOMB.STICK_RADIUS * (1.4 - 0.4 * b.t01), 0, Math.PI * 2);
+      c.stroke();
+      c.restore();
+      // shadow shrinks with height
+      c.beginPath();
+      c.ellipse(x, y, 18 - h * 0.06, 9 - h * 0.03, 0, 0, Math.PI * 2);
+      c.fillStyle = 'rgba(20, 40, 70, .4)';
+      c.fill();
+      this.bombSprite(c, x, y - h, 1, fuseFrac(b));
+      return;
+    }
+
+    if (b.s === 'ground') {
+      // danger circle breathes faster near the end
+      c.save();
+      c.globalAlpha = 0.16 + Math.abs(Math.sin(this.t * (2 + frac * 10))) * 0.12;
+      c.fillStyle = '#ff5a5f';
+      c.beginPath();
+      c.arc(b.pos.x, b.pos.y, BOMB.BLAST_RADIUS, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+      this.bombSprite(c, b.pos.x, b.pos.y, 1, frac);
+    }
+  }
+
+  private skua(c: CanvasRenderingContext2D, x: number, y: number): void {
+    c.save();
+    c.translate(x, y);
+    const flap = Math.sin(this.t * 16) * 0.9;
+    c.fillStyle = '#dfe9f2';
+    for (const side of [-1, 1]) {
+      c.save();
+      c.rotate(side * flap * 0.5);
+      c.beginPath();
+      c.ellipse(side * 26, -6, 26, 9, side * 0.5, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
+    c.beginPath();
+    c.ellipse(0, 0, 16, 11, 0, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#ffb400';
+    c.beginPath();
+    c.moveTo(14, -2);
+    c.lineTo(26, 2);
+    c.lineTo(14, 5);
+    c.closePath();
+    c.fill();
+    c.restore();
+  }
+
+  private bombSprite(c: CanvasRenderingContext2D, x: number, y: number, scale: number, frac: number): void {
+    c.save();
+    c.translate(x, y);
+    c.scale(scale, scale);
+    // red glow rises with the fuse
+    if (frac > 0) {
+      c.save();
+      c.globalAlpha = 0.25 + frac * 0.45;
+      c.shadowColor = '#ff3b30';
+      c.shadowBlur = 24 + frac * 30;
+      c.fillStyle = '#ff3b30';
+      c.beginPath();
+      c.arc(0, 0, 17, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
+    c.beginPath();
+    c.arc(0, 0, 17, 0, Math.PI * 2);
+    c.fillStyle = '#171c24';
+    c.fill();
+    c.beginPath();
+    c.arc(-5, -6, 5, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(255,255,255,.28)';
+    c.fill();
+    // fuse: shortens as it burns, spark at the tip
+    const fuseLen = 14 * (1 - frac * 0.8);
+    c.strokeStyle = '#c9a66b';
+    c.lineWidth = 3.5;
+    c.beginPath();
+    c.moveTo(4, -15);
+    c.quadraticCurveTo(10, -20 - fuseLen * 0.4, 4 + fuseLen * 0.6, -18 - fuseLen);
+    c.stroke();
+    const sx = 4 + fuseLen * 0.6;
+    const sy = -18 - fuseLen;
+    c.fillStyle = Math.sin(this.t * 30) > 0 ? '#ffe08a' : '#ff9d3d';
+    c.beginPath();
+    c.arc(sx, sy, 4.5 + Math.random() * 2, 0, Math.PI * 2);
+    c.fill();
+    c.restore();
+  }
+
+  private updateShockwaves(c: CanvasRenderingContext2D, dtMs: number): void {
+    for (const s of this.shockwaves) {
+      s.age += dtMs / 1000;
+      const r = s.age * 640;
+      c.beginPath();
+      c.arc(s.x, s.y, r, 0, Math.PI * 2);
+      c.lineWidth = Math.max(14 - s.age * 24, 2);
+      c.strokeStyle = `rgba(255, 210, 160, ${Math.max(0.7 - s.age * 1.3, 0)})`;
+      c.stroke();
+    }
+    this.shockwaves = this.shockwaves.filter((s) => s.age < 0.6);
   }
 
   private sky(c: CanvasRenderingContext2D): void {
@@ -396,16 +592,20 @@ export class Renderer {
     const dt = dtMs / 1000;
     for (const s of this.spray) {
       s.age += dt;
+      if (s.age <= 0) continue;
       s.x += s.vx * dt;
       s.y += s.vy * dt;
-      c.globalAlpha = Math.max(0.7 - s.age * 1.6, 0);
-      c.fillStyle = '#ffffff';
+      s.vx *= 0.96;
+      s.vy *= 0.96;
+      const life = s.color ? 0.9 : 0.5;
+      c.globalAlpha = Math.max(0.8 - (s.age / life) * 0.8, 0);
+      c.fillStyle = s.color ?? '#ffffff';
       c.beginPath();
-      c.arc(s.x, s.y, 3.2, 0, Math.PI * 2);
+      c.arc(s.x, s.y, s.color ? 4.5 : 3.2, 0, Math.PI * 2);
       c.fill();
     }
     c.globalAlpha = 1;
-    this.spray = this.spray.filter((s) => s.age < 0.5);
+    this.spray = this.spray.filter((s) => s.age < (s.color ? 0.9 : 0.5));
   }
 
   private penguin(c: CanvasRenderingContext2D, p: Penguin): void {

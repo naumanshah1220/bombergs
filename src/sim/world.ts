@@ -1,8 +1,10 @@
 // Authoritative world state + step(). Pure logic: no DOM, no network, no
 // rendering. The host calls step() at 60Hz and forwards the returned events.
 
+import { bombStep, idleBomb, type BombState } from './bomb';
+import { botInputs } from './bots';
 import { ARENA_H, ARENA_W, FLOE_WOBBLE, TUNE } from './constants';
-import { contains, makeFloe, radiusAt, type Floe, type Vec2 } from './floe';
+import { contains, makeFloe, type Floe, type Vec2 } from './floe';
 
 export type Penguin = {
   slot: number;
@@ -12,18 +14,26 @@ export type Penguin = {
   heading: number;   // radians, 0 = +x
   vel: Vec2;
   steer: number;     // [-1, 1] latest input
+  tap: boolean;      // consumed by the bomb machine each step
   speedMult: number;
   alive: boolean;
-  isDummy: boolean;  // placeholder AI until bots land (drives in circles)
+  isDummy: boolean;  // bot-driven
 };
 
 export type WorldEvent =
   | { kind: 'splash'; slot: number; at: Vec2 }
-  | { kind: 'eliminated'; slot: number };
+  | { kind: 'eliminated'; slot: number }
+  | { kind: 'delivered'; slot: number }   // skua picked its victim
+  | { kind: 'stick'; slot: number }       // bomb attached to a penguin
+  | { kind: 'throw'; slot: number }
+  | { kind: 'honk'; slot: number }        // tap with nothing to do
+  | { kind: 'explode'; at: Vec2 }
+  | { kind: 'launched'; slot: number; at: Vec2 }; // blasted skyward
 
 export type World = {
   penguins: Penguin[];
   floe: Floe;
+  bomb: BombState;
   tick: number;
 };
 
@@ -40,12 +50,13 @@ export function makeWorld(players: { slot: number; name: string; color: string; 
       heading: angle + Math.PI, // face inward
       vel: { x: 0, y: 0 },
       steer: 0,
+      tap: false,
       speedMult: 1,
       alive: true,
       isDummy: p.isDummy ?? false,
     };
   });
-  return { penguins, floe, tick: 0 };
+  return { penguins, floe, bomb: idleBomb(), tick: 0 };
 }
 
 export function step(w: World, dtMs: number): WorldEvent[] {
@@ -55,7 +66,11 @@ export function step(w: World, dtMs: number): WorldEvent[] {
 
   for (const p of w.penguins) {
     if (!p.alive) continue;
-    if (p.isDummy) p.steer = dummySteer(w, p);
+    if (p.isDummy) {
+      const input = botInputs(w, p);
+      p.steer = input.steer;
+      if (input.tap) p.tap = true;
+    }
 
     p.heading += p.steer * TUNE.TURN_RATE * dt;
     const thrust = {
@@ -104,26 +119,9 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     }
   }
 
-  return events;
-}
+  // The bomb machine consumes taps and may eliminate penguins.
+  events.push(...bombStep(w, dtMs));
+  for (const p of w.penguins) p.tap = false;
 
-/**
- * Placeholder dummy driving until real bots: wander gently, but steer hard
- * toward the floe center whenever the path ahead runs out of ice.
- */
-function dummySteer(w: World, p: Penguin): number {
-  const lookAhead = 90;
-  const fx = p.pos.x + Math.cos(p.heading) * lookAhead;
-  const fy = p.pos.y + Math.sin(p.heading) * lookAhead;
-  const dx = fx - w.floe.cx;
-  const dy = fy - w.floe.cy;
-  const margin = radiusAt(w.floe, Math.atan2(dy, dx)) - Math.hypot(dx, dy);
-  if (margin < 60) {
-    // steer toward center: pick the turn direction that faces us inward
-    const toCenter = Math.atan2(w.floe.cy - p.pos.y, w.floe.cx - p.pos.x);
-    let diff = toCenter - p.heading;
-    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-    return Math.sign(diff);
-  }
-  return Math.sin(w.tick / 90 + p.slot * 2) * 0.5;
+  return events;
 }

@@ -78,6 +78,9 @@ function handleHostMessage(msg: H2C): void {
       if (msg.phase === 'calibrate') ui.showCalibrate(simMode);
       // New stage: anyone calibrated returns to the wheel (revives the dead)
       if (msg.phase === 'play' && steerFn) { carrying = false; ui.stopFuse(); ui.showPlay(playerName); }
+      if (msg.phase === 'play' && !steerFn) ui.showCalibrate(simMode);
+      if (msg.phase === 'gameover') ui.showWaiting('Match over! Check the big screen 🏆');
+      if (msg.phase === 'lobby') ui.showWaiting('Back in the lobby — next match soon!');
       break;
     case 'bomb':
       if (msg.carrying && !carrying) ui.showBomb();
