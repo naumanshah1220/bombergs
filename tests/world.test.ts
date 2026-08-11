@@ -41,13 +41,24 @@ describe('trolley physics', () => {
     expect(wl.penguins[0].pos.y - start).toBeCloseTo(-(wr.penguins[0].pos.y - start), 5);
   });
 
-  it('eliminates a penguin that leaves the floe', () => {
+  it('falling in costs a life and respawns; the last life eliminates', () => {
     const w = makeWorld(players(1), rand);
     const p = w.penguins[0];
     p.pos.x = 10000; // teleport into the ocean
-    const events = step(w, 16);
+    let events = step(w, 16);
+    expect(p.alive).toBe(true);
+    expect(p.lives).toBe(2);
+    expect(p.invulnMs).toBeGreaterThan(0);
+    expect(events.map((e) => e.kind)).toContain('splash');
+    expect(events.map((e) => e.kind)).toContain('lifeLost');
+    expect(events.map((e) => e.kind)).not.toContain('eliminated');
+    // burn the remaining lives
+    for (let i = 0; i < 2; i++) {
+      p.pos.x = 10000;
+      events = step(w, 16);
+    }
     expect(p.alive).toBe(false);
-    expect(events.map((e) => e.kind)).toEqual(['splash', 'eliminated']);
+    expect(events.map((e) => e.kind)).toContain('eliminated');
   });
 
   it('joystick input walks toward the stick and stops on release', () => {
@@ -67,7 +78,7 @@ describe('trolley physics', () => {
   });
 
   it('a bomb-free rules world never delivers a bomb', () => {
-    const w = makeWorld(players(2), rand, { bomb: false, edgeDeath: true, floeBreak: false });
+    const w = makeWorld(players(2), rand, { bomb: false, edgeDeath: true, floeBreak: false, lives: 3 });
     for (let i = 0; i < 400; i++) step(w, 16); // > idle + skua time
     expect(w.bomb.s).toBe('idle');
   });

@@ -6,9 +6,9 @@
 // pass by ramming someone — plus a speed boost that makes a cornered carrier
 // genuinely dangerous.
 
-import { TUNE } from './constants';
+import { KNOCKBACK, TUNE } from './constants';
 import { addHole, type Vec2 } from './floe';
-import type { Penguin, World, WorldEvent } from './world';
+import { loseLife, type Penguin, type World, type WorldEvent } from './world';
 
 export const BOMB = {
   IDLE_MS: 1500,        // breather before the skua appears
@@ -241,11 +241,17 @@ function explode(w: World, at: Vec2, events: WorldEvent[]): void {
   events.push({ kind: 'explode', at });
   if (w.rules.floeBreak) addHole(w.floe, at, BOMB.HOLE_RADIUS);
   for (const p of w.penguins) {
-    if (!p.alive) continue;
-    if (Math.hypot(p.pos.x - at.x, p.pos.y - at.y) <= BOMB.BLAST_RADIUS) {
-      p.alive = false;
+    if (!p.alive || p.invulnMs > 0) continue;
+    const d = Math.hypot(p.pos.x - at.x, p.pos.y - at.y);
+    if (d <= BOMB.BLAST_RADIUS) {
       events.push({ kind: 'launched', slot: p.slot, at: { ...p.pos } });
-      events.push({ kind: 'eliminated', slot: p.slot });
+      events.push(...loseLife(w, p, p.pos));
+      if (p.alive) {
+        // comic knockback away from the blast (survivors go flying)
+        const a = Math.atan2(p.pos.y - at.y, p.pos.x - at.x) + (d < 1 ? Math.random() * 6.28 : 0);
+        p.vel.x += Math.cos(a) * KNOCKBACK;
+        p.vel.y += Math.sin(a) * KNOCKBACK;
+      }
     }
   }
   w.bomb = idleBomb();

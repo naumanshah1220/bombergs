@@ -16,6 +16,7 @@ export type H2C =
   | { t: 'welcome'; slot: number; color: string; slotToken: string }
   | { t: 'phase'; phase: 'lobby' | 'calibrate' | 'play' | 'draft' | 'gameover' }
   | { t: 'bomb'; carrying: boolean; fuseFrac: number }
+  | { t: 'ability'; id: AbilityId }               // picked up a crate on the map
   | { t: 'draftOffer'; options: AbilityId[] }
   | { t: 'status'; alive: boolean; placement?: number; score: number };
 

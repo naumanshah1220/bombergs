@@ -16,6 +16,14 @@ export const C = {
 export type Tunables = { -readonly [K in keyof typeof C]: number };
 export const TUNE = C as Tunables;
 
+export const START_LIVES = 3;
+export const MAX_LIVES = 5;
+export const INVULN_MS = 2500;          // post-hit mercy window (flashing)
+export const KNOCKBACK = 520;           // px/s impulse away from a blast
+export const PICKUP_INTERVAL_MS = 6500; // spawn cadence while under the cap
+export const MAX_PICKUPS = 3;
+export const PICKUP_RADIUS = 26;        // touch distance
+
 export const FLOE_SCALE_X = 1.55;       // horizontal stretch: wide berg, thin side margins
 export const FLOE_WOBBLE = 0.12;        // fraction of radius randomized per spoke
 export const FLOE_SPOKES = 64;          // star-polygon resolution

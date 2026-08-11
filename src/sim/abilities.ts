@@ -7,6 +7,8 @@ import { contains } from './floe';
 import type { AbilityId } from '../shared/protocol';
 import type { Penguin, World, WorldEvent } from './world';
 
+export const ABILITY_POOL: AbilityId[] = ['blink', 'dash', 'shield'];
+
 export const ABILITY_COOLDOWN_MS: Record<AbilityId, number> = {
   blink: 8000,
   dash: 4000,

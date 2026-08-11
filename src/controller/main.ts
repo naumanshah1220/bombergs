@@ -114,6 +114,10 @@ function handleHostMessage(msg: H2C): void {
       carrying = msg.carrying;
       if (carrying) ui.setFuse(msg.fuseFrac);
       break;
+    case 'ability':
+      myAbility = msg.id;
+      if (!carrying && canDrive()) ui.showPlay(playerName, myAbility, scheme);
+      break;
     case 'draftOffer':
       lastOffer = msg.options;
       ui.showDraft(msg.options);

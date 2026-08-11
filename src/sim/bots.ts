@@ -66,6 +66,18 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean }
     }
   }
 
+  // free time: shopping trip to the nearest pickup
+  let bestPk: { x: number; y: number } | undefined;
+  let bestD = 520;
+  for (const pk of w.pickups) {
+    const d = Math.hypot(pk.pos.x - p.pos.x, pk.pos.y - p.pos.y);
+    if (d < bestD) { bestD = d; bestPk = pk.pos; }
+  }
+  if (bestPk) {
+    const aim = Math.atan2(bestPk.y - p.pos.y, bestPk.x - p.pos.x);
+    return { steer: turnToward(p.heading, aim), tap: false };
+  }
+
   return { steer: wander(w, p), tap: false };
 }
 

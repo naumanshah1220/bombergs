@@ -1,95 +1,104 @@
-﻿// Arena renderer: everything procedural on Canvas 2D. Press P to toggle retro
-// mode — the same scene rendered at low resolution and upscaled with
-// smoothing off, i.e. free pixel art.
+// Sprite renderer — Tiny Swords art on the same 2D sim. ¾ top-down: the
+// island is seen from above, goblins are drawn side-on and flip with their
+// walking direction (the Bomberman convention).
 //
-// Scene layers, back to front: open water (aurora washes, waves, glints) →
-// floe (rim, foam, surface, speckles, blast holes) → splashes and bobbing
-// ice cubes → walking penguins (feet, scarf, snow spray, motion trails) →
-// bomb layer → vignette.
+// Layers, back to front: water tile pattern → bobbing rocks → animated foam
+// ring under the island edge → island (ground pattern, cached; holes punched
+// out) → deco → splash rings → y-sorted actors (goblins, sheep, pickups,
+// tumbling blast victims) → bomb layer → explosions → HUD chips → shake/flash.
 
 import { BOMB, fuseFrac } from '../sim/bomb';
-import { ARENA_H, ARENA_W, TUNE } from '../sim/constants';
-import { spokeAngle, radiusAt, type Floe } from '../sim/floe';
+import { ARENA_H, ARENA_W, INVULN_MS, TUNE } from '../sim/constants';
+import { contains, spokeAngle, type Floe, type Vec2 } from '../sim/floe';
 import type { Penguin, World, WorldEvent } from '../sim/world';
+import { GOBLIN, type Assets } from './assets';
 
 type Splash = { x: number; y: number; age: number };
-type Cube = { x: number; y: number; born: number; color: string };
 type Spray = { x: number; y: number; vx: number; vy: number; age: number; color?: string };
 type Shockwave = { x: number; y: number; age: number };
+type Boom = { x: number; y: number; age: number };
+type Tumble = { slot: number; x: number; y: number; vx: number; vy: number; age: number };
+type ThrowAnim = { until: number };
 
-const rand = (seed: number) => {
-  // deterministic decorations: mulberry32
-  let t = seed + 0x6d2b79f5;
-  return () => {
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
+const FOAM_SPACING = 58;
 
 export class Renderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  private low: HTMLCanvasElement;
-  private lowCtx: CanvasRenderingContext2D;
-  retro = false;
+  private a: Assets;
+  private t = 0;
   private splashes: Splash[] = [];
-  private cubes: Cube[] = [];
   private spray: Spray[] = [];
   private shockwaves: Shockwave[] = [];
+  private booms: Boom[] = [];
+  private tumbles: Tumble[] = [];
+  private throwAnims = new Map<number, ThrowAnim>();
+  private facing = new Map<number, number>(); // slot → 1 | -1
   private shake = 0;
   private flash = 0;
-  private stars: { x: number; y: number; r: number; tw: number }[] = [];
-  private speckles: { a: number; d: number; r: number }[] = []; // polar, relative
-  private t = 0;
+  private islandCache?: { canvas: HTMLCanvasElement; holes: number };
+  private foamSpots: Vec2[] = [];
+  private decoSpots: { x: number; y: number; img: 'deco1' | 'deco9' | 'deco10' }[] = [];
+  private sheep = { x: 0, y: 0, dir: 0, timer: 0, vx: 0, vy: 0 };
+  private groundPattern?: CanvasPattern;
+  private waterPattern?: CanvasPattern;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, assets: Assets) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
-    this.low = document.createElement('canvas');
-    this.low.width = ARENA_W / 5;
-    this.low.height = ARENA_H / 5;
-    this.lowCtx = this.low.getContext('2d')!;
-    const r1 = rand(1234);
-    for (let i = 0; i < 90; i++) {
-      this.stars.push({ x: r1() * ARENA_W, y: r1() * ARENA_H * 0.30, r: 0.6 + r1() * 1.6, tw: r1() * 6 });
+    this.a = assets;
+  }
+
+  private initForFloe(f: Floe): void {
+    if (this.foamSpots.length) return;
+    // foam anchors along the boundary
+    let prev: Vec2 | undefined;
+    for (let i = 0; i < f.radii.length; i++) {
+      const a = spokeAngle(i);
+      const p = { x: f.cx + Math.cos(a) * f.radii[i] * f.sx, y: f.cy + Math.sin(a) * f.radii[i] };
+      if (!prev || Math.hypot(p.x - prev.x, p.y - prev.y) > FOAM_SPACING) {
+        this.foamSpots.push(p);
+        prev = p;
+      }
     }
-    const r2 = rand(777);
-    for (let i = 0; i < 110; i++) {
-      this.speckles.push({ a: r2() * Math.PI * 2, d: Math.sqrt(r2()), r: 1 + r2() * 3.4 });
+    // scattered walk-over decorations, safely inside
+    const rng = mulberry(4242);
+    const decoNames = ['deco1', 'deco9', 'deco10'] as const;
+    for (let i = 0; i < 14; i++) {
+      const ang = rng() * Math.PI * 2;
+      const d = Math.sqrt(rng()) * 0.75;
+      this.decoSpots.push({
+        x: f.cx + Math.cos(ang) * TUNE.FLOE_RADIUS * d * f.sx,
+        y: f.cy + Math.sin(ang) * TUNE.FLOE_RADIUS * d,
+        img: decoNames[i % 3],
+      });
     }
-    window.addEventListener('keydown', (e) => {
-      if (e.key.toLowerCase() === 'p') this.retro = !this.retro;
-    });
+    this.sheep = { x: f.cx + 180, y: f.cy - 120, dir: 0, timer: 0, vx: 0, vy: 0 };
+    // tile patterns: ground = grass block center tile (64,64); water = whole tile
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = 64;
+    tile.getContext('2d')!.drawImage(this.a.img.tilemap, 64, 64, 64, 64, 0, 0, 64, 64);
+    this.groundPattern = this.ctx.createPattern(tile, 'repeat')!;
+    this.waterPattern = this.ctx.createPattern(this.a.img.water, 'repeat')!;
   }
 
   addEvents(events: WorldEvent[], world: World): void {
     for (const e of events) {
-      if (e.kind === 'splash') {
-        this.splashes.push({ x: e.at.x, y: e.at.y, age: 0 });
-        const p = world.penguins.find((q) => q.slot === e.slot);
-        this.cubes.push({ x: e.at.x, y: e.at.y, born: this.t, color: p?.color ?? '#fff' });
-      }
+      if (e.kind === 'splash') this.splashes.push({ x: e.at.x, y: e.at.y, age: 0 });
+      if (e.kind === 'throw') this.throwAnims.set(e.slot, { until: this.t + 0.55 });
       if (e.kind === 'explode') {
         this.shake = 1;
-        this.flash = 0.35;
+        this.flash = 0.3;
+        this.booms.push({ x: e.at.x, y: e.at.y, age: 0 });
         this.shockwaves.push({ x: e.at.x, y: e.at.y, age: 0 });
-        for (let i = 0; i < 30; i++) {
-          const a = (i / 30) * Math.PI * 2;
-          const v = 180 + Math.random() * 260;
-          this.spray.push({
-            x: e.at.x, y: e.at.y,
-            vx: Math.cos(a) * v, vy: Math.sin(a) * v,
-            age: -0.1,
-            color: i % 3 === 0 ? '#ffb400' : i % 3 === 1 ? '#ff6a3d' : '#ffffff',
-          });
-        }
       }
-      if (e.kind === 'bounce') {
-        for (let i = 0; i < 6; i++) {
-          const a = Math.random() * Math.PI * 2;
-          this.spray.push({ x: e.at.x, y: e.at.y, vx: Math.cos(a) * 110, vy: Math.sin(a) * 110, age: 0 });
-        }
+      if (e.kind === 'launched') {
+        const ang = Math.random() * Math.PI * 2;
+        this.tumbles.push({
+          slot: e.slot, x: e.at.x, y: e.at.y,
+          vx: Math.cos(ang) * 220, vy: Math.sin(ang) * 220 - 260,
+          age: 0,
+        });
       }
       if (e.kind === 'blink') {
         for (const spot of [e.from, e.to]) {
@@ -101,80 +110,334 @@ export class Renderer {
       }
       if (e.kind === 'ricochet') {
         const p = world.penguins.find((q) => q.slot === e.slot);
-        if (p) this.shockwaves.push({ x: p.pos.x, y: p.pos.y, age: 0.35 }); // small, quick ring
+        if (p) this.shockwaves.push({ x: p.pos.x, y: p.pos.y, age: 0.35 });
       }
-      if (e.kind === 'launched') {
-        // blasted skyward: their cube splashes down a beat later, further out
-        const p = world.penguins.find((q) => q.slot === e.slot);
-        this.cubes.push({
-          x: e.at.x + (Math.random() - 0.5) * 260,
-          y: e.at.y + (Math.random() - 0.5) * 260,
-          born: this.t + 0.9,
-          color: p?.color ?? '#fff',
-        });
+      if (e.kind === 'bounce') {
+        for (let i = 0; i < 6; i++) {
+          const a = Math.random() * Math.PI * 2;
+          this.spray.push({ x: e.at.x, y: e.at.y, vx: Math.cos(a) * 110, vy: Math.sin(a) * 110, age: 0 });
+        }
       }
     }
   }
 
   draw(w: World, dtMs: number): void {
     this.t += dtMs / 1000;
+    this.initForFloe(w.floe);
     this.canvas.width = this.canvas.clientWidth;
     this.canvas.height = this.canvas.clientHeight;
+    const c = this.ctx;
+    c.imageSmoothingEnabled = false;
 
-    this.ctx.fillStyle = '#052430'; // letterbox = same deep water as the scene edge
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-    const target = this.retro ? this.lowCtx : this.ctx;
-    const scale = this.retro
-      ? this.low.width / ARENA_W
-      : Math.min(this.canvas.width / ARENA_W, this.canvas.height / ARENA_H);
-
-    target.save();
-    if (!this.retro) {
-      target.translate(
-        (this.canvas.width - ARENA_W * scale) / 2,
-        (this.canvas.height - ARENA_H * scale) / 2,
-      );
-    }
-    target.scale(scale, scale);
+    const scale = Math.min(this.canvas.width / ARENA_W, this.canvas.height / ARENA_H);
+    c.fillStyle = '#47aba9'; // pack's sea color for the letterbox
+    c.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    c.save();
+    c.translate((this.canvas.width - ARENA_W * scale) / 2, (this.canvas.height - ARENA_H * scale) / 2);
+    c.scale(scale, scale);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dtMs / 400);
-      const amp = this.shake * 16;
-      target.translate((Math.random() - 0.5) * amp, (Math.random() - 0.5) * amp);
+      const amp = this.shake * 14;
+      c.translate((Math.random() - 0.5) * amp, (Math.random() - 0.5) * amp);
     }
-    this.scene(target, w, dtMs);
+
+    this.waterLayer(c);
+    this.foamLayer(c);
+    this.islandLayer(c, w.floe);
+    this.decoLayer(c);
+    this.updateSplashes(c, dtMs);
+    this.actorsLayer(c, w, dtMs);
+    this.bombLayer(c, w);
+    this.updateBooms(c, dtMs);
+    this.updateShockwaves(c, dtMs);
+    this.updateSpray(c, dtMs);
+
     if (this.flash > 0) {
       this.flash = Math.max(0, this.flash - dtMs / 1000);
-      target.fillStyle = `rgba(255, 240, 220, ${this.flash * 2})`;
-      target.fillRect(0, 0, ARENA_W, ARENA_H);
+      c.fillStyle = `rgba(255, 240, 220, ${this.flash * 2})`;
+      c.fillRect(0, 0, ARENA_W, ARENA_H);
     }
-    target.restore();
+    c.restore();
+  }
 
-    if (this.retro) {
-      this.ctx.imageSmoothingEnabled = false;
-      const s = Math.min(this.canvas.width / this.low.width, this.canvas.height / this.low.height);
-      this.ctx.drawImage(
-        this.low,
-        (this.canvas.width - this.low.width * s) / 2,
-        (this.canvas.height - this.low.height * s) / 2,
-        this.low.width * s,
-        this.low.height * s,
-      );
+  private waterLayer(c: CanvasRenderingContext2D): void {
+    if (this.waterPattern) {
+      c.fillStyle = this.waterPattern;
+      c.fillRect(0, 0, ARENA_W, ARENA_H);
+    }
+    // a few bobbing rocks in open water
+    const rockFrame = Math.floor(this.t * 8) % 8;
+    for (const [img, x, y] of [
+      [this.a.img.rocks1, 120, 140],
+      [this.a.img.rocks2, ARENA_W - 220, 220],
+      [this.a.img.rocks1, ARENA_W - 180, ARENA_H - 190],
+      [this.a.img.rocks2, 90, ARENA_H - 160],
+    ] as const) {
+      c.drawImage(img, rockFrame * 128, 0, 128, 128, x, y, 128, 128);
     }
   }
 
-  private scene(c: CanvasRenderingContext2D, w: World, dtMs: number): void {
-    this.water(c);
-    this.floe(c, w.floe);
-    this.updateSplashes(c, dtMs);
-    this.updateCubes(c);
-    this.emitSpray(w);
-    this.updateSpray(c, dtMs);
-    const sorted = [...w.penguins].filter((p) => p.alive).sort((a, b) => a.pos.y - b.pos.y);
-    for (const p of sorted) this.penguin(c, p);
-    this.bombLayer(c, w);
-    this.updateShockwaves(c, dtMs);
-    this.vignette(c);
+  private foamLayer(c: CanvasRenderingContext2D): void {
+    const frame = Math.floor(this.t * 9) % 8;
+    for (const p of this.foamSpots) {
+      c.drawImage(this.a.img.foam, frame * 192, 0, 192, 192, p.x - 96, p.y - 96, 192, 192);
+    }
+  }
+
+  private islandLayer(c: CanvasRenderingContext2D, f: Floe): void {
+    if (!this.islandCache || this.islandCache.holes !== f.holes.length) {
+      const canvas = this.islandCache?.canvas ?? document.createElement('canvas');
+      canvas.width = ARENA_W;
+      canvas.height = ARENA_H;
+      const ic = canvas.getContext('2d')!;
+      ic.clearRect(0, 0, ARENA_W, ARENA_H);
+      const path = new Path2D();
+      for (let i = 0; i < f.radii.length; i++) {
+        const a = spokeAngle(i);
+        const x = f.cx + Math.cos(a) * f.radii[i] * f.sx;
+        const y = f.cy + Math.sin(a) * f.radii[i];
+        i === 0 ? path.moveTo(x, y) : path.lineTo(x, y);
+      }
+      path.closePath();
+      // sand lip under the grass, then grass pattern
+      ic.save();
+      ic.translate(0, 10);
+      ic.fillStyle = '#d8b365';
+      ic.fill(path);
+      ic.restore();
+      ic.fillStyle = this.groundPattern ?? '#7ec850';
+      ic.fill(path);
+      ic.lineWidth = 6;
+      ic.strokeStyle = 'rgba(255, 250, 220, .5)';
+      ic.stroke(path);
+      // punch the blast holes out to water
+      for (const h of f.holes) {
+        ic.save();
+        ic.globalCompositeOperation = 'destination-out';
+        ic.beginPath();
+        ic.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+        ic.fill();
+        ic.restore();
+        // scorched lip
+        ic.beginPath();
+        ic.arc(h.x, h.y, h.r + 3, 0, Math.PI * 2);
+        ic.lineWidth = 6;
+        ic.strokeStyle = 'rgba(90, 60, 30, .55)';
+        ic.stroke();
+      }
+      this.islandCache = { canvas, holes: f.holes.length };
+    }
+    c.drawImage(this.islandCache.canvas, 0, 0);
+  }
+
+  private decoLayer(c: CanvasRenderingContext2D): void {
+    for (const d of this.decoSpots) {
+      c.drawImage(this.a.img[d.img], d.x - 32, d.y - 40, 64, 64);
+    }
+  }
+
+  private actorsLayer(c: CanvasRenderingContext2D, w: World, dtMs: number): void {
+    type Actor = { y: number; drawFn: () => void };
+    const actors: Actor[] = [];
+
+    for (const p of w.penguins) {
+      if (!p.alive) continue;
+      actors.push({ y: p.pos.y, drawFn: () => this.goblin(c, p) });
+    }
+
+    // pickups bob gently
+    for (const pk of w.pickups) {
+      const bob = Math.sin(this.t * 3 + pk.id) * 4;
+      actors.push({
+        y: pk.pos.y,
+        drawFn: () => {
+          c.save();
+          c.translate(pk.pos.x, pk.pos.y + bob);
+          c.beginPath();
+          c.ellipse(0, 16 - bob, 18, 7, 0, 0, Math.PI * 2);
+          c.fillStyle = 'rgba(40, 70, 40, .3)';
+          c.fill();
+          if (pk.kind === 'heart') this.heart(c, 0, 0, 15, '#ff4560');
+          else this.crate(c, 0, 0);
+          c.restore();
+        },
+      });
+    }
+
+    // the sheep: pure ambience, wanders the island
+    this.stepSheep(w, dtMs);
+    actors.push({
+      y: this.sheep.y,
+      drawFn: () => {
+        const moving = Math.hypot(this.sheep.vx, this.sheep.vy) > 6;
+        const frame = moving ? Math.floor(this.t * 10) % 6 : 0;
+        c.save();
+        c.translate(this.sheep.x, this.sheep.y);
+        if (this.sheep.vx < 0) c.scale(-1, 1);
+        c.drawImage(this.a.img.sheep, frame * 128, 0, 128, 128, -48, -64, 96, 96);
+        c.restore();
+      },
+    });
+
+    // blast victims tumbling through the air
+    for (const tb of [...this.tumbles]) {
+      tb.age += dtMs / 1000;
+      tb.x += tb.vx * dtMs / 1000;
+      tb.y += tb.vy * dtMs / 1000;
+      tb.vy += 700 * dtMs / 1000;
+      if (tb.age > 1.1) {
+        this.tumbles = this.tumbles.filter((q) => q !== tb);
+        continue;
+      }
+      actors.push({
+        y: tb.y + 4000, // always on top
+        drawFn: () => {
+          c.save();
+          c.translate(tb.x, tb.y);
+          c.rotate(tb.age * 12);
+          c.globalAlpha = Math.min(1, 2.2 - tb.age * 2);
+          const sheet = this.a.goblins[tb.slot % this.a.goblins.length];
+          c.drawImage(sheet, 0, 0, GOBLIN.FW, GOBLIN.FH, -45, -45, 90, 90);
+          c.restore();
+          c.globalAlpha = 1;
+        },
+      });
+    }
+
+    actors.sort((x, z) => x.y - z.y);
+    for (const a of actors) a.drawFn();
+  }
+
+  private goblin(c: CanvasRenderingContext2D, p: Penguin): void {
+    const R = TUNE.PENGUIN_RADIUS;
+    const size = R * 6; // frame draw size; the goblin fills ~1/3 of the frame
+    const sheet = this.a.goblins[p.slot % this.a.goblins.length];
+    const speed = Math.hypot(p.vel.x, p.vel.y);
+
+    if (Math.abs(p.vel.x) > 12) this.facing.set(p.slot, Math.sign(p.vel.x));
+    const face = this.facing.get(p.slot) ?? 1;
+
+    // invulnerable = flashing
+    if (p.invulnMs > 0 && Math.floor((INVULN_MS - p.invulnMs) / 110) % 2 === 0) return;
+
+    const throwing = this.throwAnims.get(p.slot);
+    let row = 0;
+    let frames = GOBLIN.IDLE;
+    let rate = 7;
+    if (throwing && this.t < throwing.until) {
+      row = 2;
+      frames = GOBLIN.THROW;
+      rate = 13;
+    } else if (speed > 25) {
+      row = 1;
+      frames = GOBLIN.RUN;
+      rate = 11;
+    }
+    const frame = Math.floor(this.t * rate) % frames;
+
+    c.drawImage(this.a.img.shadow, p.pos.x - size / 2, p.pos.y - size / 2 + 6, size, size);
+    c.save();
+    c.translate(p.pos.x, p.pos.y);
+    if (face < 0) c.scale(-1, 1);
+    c.drawImage(sheet, frame * GOBLIN.FW, row * GOBLIN.FH, GOBLIN.FW, GOBLIN.FH, -size / 2, -size / 2 - R, size, size);
+    c.restore();
+
+    // shield bubble
+    if (p.shieldMs > 0) {
+      c.save();
+      c.globalAlpha = 0.35 + Math.sin(this.t * 10) * 0.08;
+      c.fillStyle = '#9fdcff';
+      c.strokeStyle = '#e8f8ff';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.arc(p.pos.x, p.pos.y - R, R * 2.4, 0, Math.PI * 2);
+      c.fill();
+      c.stroke();
+      c.restore();
+    }
+
+    // name chip + hearts
+    c.font = 'bold 15px "Segoe UI", sans-serif';
+    c.textAlign = 'center';
+    const tw = c.measureText(p.name).width;
+    c.fillStyle = 'rgba(8, 16, 34, .55)';
+    c.beginPath();
+    c.roundRect(p.pos.x - tw / 2 - 7, p.pos.y - R - size / 2 - 6, tw + 14, 20, 6);
+    c.fill();
+    c.fillStyle = p.color;
+    c.fillText(p.name, p.pos.x, p.pos.y - R - size / 2 + 9);
+    for (let i = 0; i < p.lives; i++) {
+      this.heart(c, p.pos.x + (i - (p.lives - 1) / 2) * 16, p.pos.y - R - size / 2 - 16, 6, '#ff4560');
+    }
+  }
+
+  private stepSheep(w: World, dtMs: number): void {
+    const s = this.sheep;
+    s.timer -= dtMs;
+    if (s.timer <= 0) {
+      s.timer = 1200 + Math.random() * 2600;
+      s.dir = Math.random() * Math.PI * 2;
+      const still = Math.random() < 0.4;
+      s.vx = still ? 0 : Math.cos(s.dir) * 55;
+      s.vy = still ? 0 : Math.sin(s.dir) * 55;
+    }
+    const nx = s.x + s.vx * dtMs / 1000;
+    const ny = s.y + s.vy * dtMs / 1000;
+    if (contains(w.floe, { x: nx, y: ny })) {
+      s.x = nx;
+      s.y = ny;
+    } else {
+      s.vx *= -1;
+      s.vy *= -1;
+    }
+  }
+
+  private heart(c: CanvasRenderingContext2D, x: number, y: number, r: number, color: string): void {
+    c.save();
+    c.translate(x, y);
+    c.fillStyle = color;
+    c.beginPath();
+    c.moveTo(0, r);
+    c.bezierCurveTo(-r * 1.4, 0, -r * 0.7, -r, 0, -r * 0.35);
+    c.bezierCurveTo(r * 0.7, -r, r * 1.4, 0, 0, r);
+    c.fill();
+    c.restore();
+  }
+
+  private crate(c: CanvasRenderingContext2D, x: number, y: number): void {
+    c.save();
+    c.translate(x, y);
+    c.fillStyle = '#a5692e';
+    c.strokeStyle = '#6e421a';
+    c.lineWidth = 3;
+    c.fillRect(-16, -16, 32, 32);
+    c.strokeRect(-16, -16, 32, 32);
+    c.beginPath();
+    c.moveTo(-16, -16); c.lineTo(16, 16);
+    c.moveTo(16, -16); c.lineTo(-16, 16);
+    c.stroke();
+    c.fillStyle = '#ffe9b0';
+    c.font = 'bold 18px "Segoe UI", sans-serif';
+    c.textAlign = 'center';
+    c.fillText('?', 0, 7);
+    c.restore();
+  }
+
+  private dynamite(c: CanvasRenderingContext2D, x: number, y: number, scale: number, frac: number): void {
+    const frame = Math.floor(this.t * (6 + frac * 14)) % 6;
+    const s = 64 * scale;
+    if (frac > 0.6) {
+      c.save();
+      c.globalAlpha = 0.3 + (frac - 0.6) * 1.2;
+      c.shadowColor = '#ff3b30';
+      c.shadowBlur = 26;
+      c.beginPath();
+      c.arc(x, y, s * 0.35, 0, Math.PI * 2);
+      c.fillStyle = '#ff3b30';
+      c.fill();
+      c.restore();
+    }
+    c.drawImage(this.a.img.dynamite, frame * 64, 0, 64, 64, x - s / 2, y - s / 2, s, s);
   }
 
   private bombLayer(c: CanvasRenderingContext2D, w: World): void {
@@ -185,22 +448,18 @@ export class Renderer {
       const target = w.penguins.find((p) => p.slot === b.toSlot);
       if (!target) return;
       const t = Math.min(b.t / BOMB.SKUA_MS, 1);
-      const sx = target.pos.x + (1 - t) * 320;
-      const sy = target.pos.y - 90 - (1 - t) * 420;
-      // exclamation over the chosen one
+      const sy = target.pos.y - 120 - (1 - t) * 520;
       c.font = 'bold 44px "Segoe UI", sans-serif';
       c.textAlign = 'center';
       c.fillStyle = '#ff5a5f';
-      c.fillText('!', target.pos.x, target.pos.y - 58 - Math.abs(Math.sin(this.t * 8)) * 10);
-      this.skua(c, sx, sy);
-      this.bombSprite(c, sx + 6, sy + 34, 0.8, 0);
+      c.fillText('!', target.pos.x, target.pos.y - 88 - Math.abs(Math.sin(this.t * 8)) * 10);
+      this.dynamite(c, target.pos.x, sy, 1.4, 0); // falling from the sky
       return;
     }
 
     if (b.s === 'carried') {
       const me = w.penguins.find((p) => p.slot === b.slot);
       if (!me) return;
-      // pass radius ring, rotating dashes, angrier as fuse burns
       c.save();
       c.translate(me.pos.x, me.pos.y);
       c.rotate(this.t * 0.7);
@@ -211,111 +470,71 @@ export class Renderer {
       c.arc(0, 0, BOMB.PASS_RADIUS, 0, Math.PI * 2);
       c.stroke();
       c.restore();
-      const pulse = 1 + Math.sin(this.t * (4 + frac * 14)) * 0.08 * (0.5 + frac);
-      this.bombSprite(c, me.pos.x, me.pos.y - TUNE.PENGUIN_RADIUS * 1.6, pulse, frac);
+      this.dynamite(c, me.pos.x, me.pos.y - TUNE.PENGUIN_RADIUS * 4.2, 1, frac);
       return;
     }
 
     if (b.s === 'flying') {
       const x = b.from.x + (b.to.x - b.from.x) * b.t01;
       const y = b.from.y + (b.to.y - b.from.y) * b.t01;
-      const h = Math.sin(Math.PI * Math.min(b.t01, 1)) * 130;
-      // landing reticle — tightens as the homing bomb closes in
+      const h = Math.sin(Math.PI * Math.min(b.t01, 1)) * 150;
       c.save();
       c.setLineDash([8, 8]);
       c.lineWidth = 4;
-      c.strokeStyle = b.dodged ? 'rgba(180, 200, 220, .7)' : 'rgba(255, 90, 95, .85)';
+      c.strokeStyle = b.dodged ? 'rgba(200, 215, 230, .7)' : 'rgba(255, 90, 95, .85)';
       c.beginPath();
-      c.arc(b.to.x, b.to.y, 48 * (1.4 - 0.4 * b.t01), 0, Math.PI * 2);
+      c.arc(b.to.x, b.to.y, 46 * (1.4 - 0.4 * b.t01), 0, Math.PI * 2);
       c.stroke();
       c.restore();
-      // shadow shrinks with height
       c.beginPath();
-      c.ellipse(x, y, 18 - h * 0.06, 9 - h * 0.03, 0, 0, Math.PI * 2);
-      c.fillStyle = 'rgba(20, 40, 70, .4)';
+      c.ellipse(x, y, 16 - h * 0.05, 8 - h * 0.02, 0, 0, Math.PI * 2);
+      c.fillStyle = 'rgba(20, 50, 40, .4)';
       c.fill();
-      this.bombSprite(c, x, y - h, 1, fuseFrac(b));
+      c.save();
+      c.translate(x, y - h);
+      c.rotate(this.t * 14);
+      this.dynamite(c, 0, 0, 1, fuseFrac(b));
+      c.restore();
       return;
     }
 
     if (b.s === 'ground') {
-      // danger circle breathes faster near the end
       c.save();
-      c.globalAlpha = 0.16 + Math.abs(Math.sin(this.t * (2 + frac * 10))) * 0.12;
+      c.globalAlpha = 0.14 + Math.abs(Math.sin(this.t * (2 + frac * 10))) * 0.12;
       c.fillStyle = '#ff5a5f';
       c.beginPath();
       c.arc(b.pos.x, b.pos.y, BOMB.BLAST_RADIUS, 0, Math.PI * 2);
       c.fill();
       c.restore();
-      this.bombSprite(c, b.pos.x, b.pos.y, 1, frac);
+      this.dynamite(c, b.pos.x, b.pos.y, 1, frac);
     }
   }
 
-  private skua(c: CanvasRenderingContext2D, x: number, y: number): void {
-    c.save();
-    c.translate(x, y);
-    const flap = Math.sin(this.t * 16) * 0.9;
-    c.fillStyle = '#dfe9f2';
-    for (const side of [-1, 1]) {
-      c.save();
-      c.rotate(side * flap * 0.5);
-      c.beginPath();
-      c.ellipse(side * 26, -6, 26, 9, side * 0.5, 0, Math.PI * 2);
-      c.fill();
-      c.restore();
+  private updateBooms(c: CanvasRenderingContext2D, dtMs: number): void {
+    for (const boom of this.booms) {
+      boom.age += dtMs / 1000;
+      const frame = Math.floor(boom.age * 18);
+      if (frame < 9) {
+        const s = 192 * 1.6;
+        c.drawImage(this.a.img.explosions, frame * 192, 0, 192, 192, boom.x - s / 2, boom.y - s / 2, s, s);
+      }
     }
-    c.beginPath();
-    c.ellipse(0, 0, 16, 11, 0, 0, Math.PI * 2);
-    c.fill();
-    c.fillStyle = '#ffb400';
-    c.beginPath();
-    c.moveTo(14, -2);
-    c.lineTo(26, 2);
-    c.lineTo(14, 5);
-    c.closePath();
-    c.fill();
-    c.restore();
+    this.booms = this.booms.filter((b) => b.age * 18 < 9);
   }
 
-  private bombSprite(c: CanvasRenderingContext2D, x: number, y: number, scale: number, frac: number): void {
-    c.save();
-    c.translate(x, y);
-    c.scale(scale, scale);
-    // red glow rises with the fuse
-    if (frac > 0) {
-      c.save();
-      c.globalAlpha = 0.25 + frac * 0.45;
-      c.shadowColor = '#ff3b30';
-      c.shadowBlur = 24 + frac * 30;
-      c.fillStyle = '#ff3b30';
-      c.beginPath();
-      c.arc(0, 0, 17, 0, Math.PI * 2);
-      c.fill();
-      c.restore();
+  private updateSplashes(c: CanvasRenderingContext2D, dtMs: number): void {
+    for (const s of this.splashes) {
+      s.age += dtMs / 1000;
+      for (const mult of [1, 0.6]) {
+        const r = (14 + s.age * 120) * mult;
+        c.beginPath();
+        c.arc(s.x, s.y, r, 0, Math.PI * 2);
+        c.lineWidth = Math.max(7 - s.age * 6, 1) * mult;
+        c.strokeStyle = `rgba(235, 250, 255, ${Math.max(0.85 - s.age, 0)})`;
+        c.stroke();
+      }
     }
-    c.beginPath();
-    c.arc(0, 0, 17, 0, Math.PI * 2);
-    c.fillStyle = '#171c24';
-    c.fill();
-    c.beginPath();
-    c.arc(-5, -6, 5, 0, Math.PI * 2);
-    c.fillStyle = 'rgba(255,255,255,.28)';
-    c.fill();
-    // fuse: shortens as it burns, spark at the tip
-    const fuseLen = 14 * (1 - frac * 0.8);
-    c.strokeStyle = '#c9a66b';
-    c.lineWidth = 3.5;
-    c.beginPath();
-    c.moveTo(4, -15);
-    c.quadraticCurveTo(10, -20 - fuseLen * 0.4, 4 + fuseLen * 0.6, -18 - fuseLen);
-    c.stroke();
-    const sx = 4 + fuseLen * 0.6;
-    const sy = -18 - fuseLen;
-    c.fillStyle = Math.sin(this.t * 30) > 0 ? '#ffe08a' : '#ff9d3d';
-    c.beginPath();
-    c.arc(sx, sy, 4.5 + Math.random() * 2, 0, Math.PI * 2);
-    c.fill();
-    c.restore();
+    this.splashes = this.splashes.filter((s) => s.age < 1.1);
   }
 
   private updateShockwaves(c: CanvasRenderingContext2D, dtMs: number): void {
@@ -329,240 +548,6 @@ export class Renderer {
       c.stroke();
     }
     this.shockwaves = this.shockwaves.filter((s) => s.age < 0.6);
-  }
-
-  /**
-   * Full top-down ocean: deep water fills the whole frame, and the aurora
-   * exists only as drifting color washes reflected on the surface. No sky,
-   * no horizon — we are looking straight down at a floe at night.
-   */
-  private water(c: CanvasRenderingContext2D): void {
-    const g = c.createRadialGradient(
-      ARENA_W / 2, ARENA_H / 2, ARENA_H * 0.25,
-      ARENA_W / 2, ARENA_H / 2, ARENA_W * 0.62,
-    );
-    g.addColorStop(0, '#0f4d60');
-    g.addColorStop(0.6, '#0a3a4d');
-    g.addColorStop(1, '#052430');
-    c.fillStyle = g;
-    c.fillRect(0, 0, ARENA_W, ARENA_H);
-
-    // aurora reflections: big soft color washes sliding over the water
-    c.save();
-    c.globalCompositeOperation = 'lighter';
-    const washes = [
-      { hue: 150, cx: 0.25, cy: 0.2, r: 500, speed: 0.11, alpha: 0.05 },
-      { hue: 285, cx: 0.78, cy: 0.3, r: 560, speed: 0.07, alpha: 0.045 },
-      { hue: 175, cx: 0.5, cy: 0.85, r: 520, speed: 0.09, alpha: 0.04 },
-      { hue: 320, cx: 0.12, cy: 0.75, r: 430, speed: 0.13, alpha: 0.035 },
-    ];
-    for (const wsh of washes) {
-      const x = wsh.cx * ARENA_W + Math.sin(this.t * wsh.speed * 2) * 130;
-      const y = wsh.cy * ARENA_H + Math.cos(this.t * wsh.speed * 1.4) * 90;
-      const grad = c.createRadialGradient(x, y, 0, x, y, wsh.r);
-      grad.addColorStop(0, `hsla(${wsh.hue}, 90%, 65%, ${wsh.alpha})`);
-      grad.addColorStop(1, 'transparent');
-      c.fillStyle = grad;
-      c.fillRect(x - wsh.r, y - wsh.r, wsh.r * 2, wsh.r * 2);
-    }
-    c.restore();
-
-    // gentle wave strokes drifting across the whole surface
-    c.save();
-    for (let i = 0; i < 16; i++) {
-      const y = (i / 16) * ARENA_H + Math.sin(this.t * 0.5 + i * 1.7) * 14;
-      c.globalAlpha = 0.045 + (i % 3) * 0.012;
-      c.strokeStyle = i % 4 === 0 ? '#7dffb2' : i % 4 === 2 ? '#d98cff' : '#bfe9ff';
-      c.lineWidth = 2.2;
-      c.beginPath();
-      for (let x = -60; x <= ARENA_W + 60; x += 64) {
-        const wy = y + Math.sin(x * 0.014 + this.t * 1.1 + i * 2) * 6;
-        x === -60 ? c.moveTo(x, wy) : c.lineTo(x, wy);
-      }
-      c.stroke();
-    }
-    c.restore();
-
-    // star glints twinkling on the water
-    for (const s of this.stars) {
-      c.globalAlpha = 0.12 + 0.2 * Math.abs(Math.sin(this.t * 0.8 + s.tw));
-      c.fillStyle = '#dceaff';
-      c.fillRect(s.x, (s.y * 3.2) % ARENA_H, s.r, s.r);
-    }
-    c.globalAlpha = 1;
-  }
-
-  private floePath(c: CanvasRenderingContext2D, f: Floe, inset: number, wobblePhase = 0): void {
-    c.beginPath();
-    for (let i = 0; i < f.radii.length; i++) {
-      const a = spokeAngle(i);
-      const wob = wobblePhase ? Math.sin(a * 5 + this.t * 2) * 3 : 0;
-      const r = Math.max(f.radii[i] - inset + wob, 0);
-      const x = f.cx + Math.cos(a) * r * f.sx;
-      const y = f.cy + Math.sin(a) * r;
-      i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
-    }
-    c.closePath();
-  }
-
-  private floe(c: CanvasRenderingContext2D, f: Floe): void {
-    // lapping foam ring
-    c.save();
-    this.floePath(c, f, -14, 1);
-    c.fillStyle = 'rgba(214, 240, 252, .22)';
-    c.fill();
-    c.restore();
-    // submerged blue rim, offset down
-    c.save();
-    c.translate(0, 12);
-    this.floePath(c, f, 0);
-    c.fillStyle = '#4f88b5';
-    c.fill();
-    c.restore();
-    // surface
-    this.floePath(c, f, 0);
-    const g = c.createRadialGradient(f.cx - 120, f.cy - 160, 60, f.cx, f.cy, TUNE.FLOE_RADIUS * f.sx * 1.15);
-    g.addColorStop(0, '#ffffff');
-    g.addColorStop(0.55, '#eef6fc');
-    g.addColorStop(1, '#cfe3f2');
-    c.fillStyle = g;
-    c.fill();
-    this.floePath(c, f, 0);
-    c.lineWidth = 4;
-    c.strokeStyle = '#aecfe6';
-    c.stroke();
-    // texture: speckles and faint veins, clipped to the surface
-    c.save();
-    this.floePath(c, f, 6);
-    c.clip();
-    c.fillStyle = 'rgba(140, 180, 210, .35)';
-    for (const s of this.speckles) {
-      const rr = radiusAt(f, s.a) * s.d * 0.92;
-      c.beginPath();
-      c.arc(f.cx + Math.cos(s.a) * rr * f.sx, f.cy + Math.sin(s.a) * rr, s.r, 0, Math.PI * 2);
-      c.fill();
-    }
-    // blast holes: open water punched through the ice
-    for (const h of f.holes) {
-      const wg = c.createRadialGradient(h.x, h.y, h.r * 0.2, h.x, h.y, h.r);
-      wg.addColorStop(0, '#0a3a4d');
-      wg.addColorStop(0.8, '#0e4a5f');
-      wg.addColorStop(1, '#1a6579');
-      c.fillStyle = wg;
-      c.beginPath();
-      c.arc(h.x, h.y, h.r, 0, Math.PI * 2);
-      c.fill();
-      // jagged icy lip
-      c.strokeStyle = 'rgba(220, 240, 252, .8)';
-      c.lineWidth = 3;
-      c.beginPath();
-      for (let k = 0; k <= 14; k++) {
-        const a = (k / 14) * Math.PI * 2;
-        const rr = h.r * (1 + ((k * 7) % 3) * 0.045);
-        const px = h.x + Math.cos(a) * rr;
-        const py = h.y + Math.sin(a) * rr;
-        k === 0 ? c.moveTo(px, py) : c.lineTo(px, py);
-      }
-      c.closePath();
-      c.stroke();
-      // shimmering water inside
-      c.globalAlpha = 0.25 + Math.sin(this.t * 2 + h.x) * 0.08;
-      c.strokeStyle = '#7dd6ff';
-      c.lineWidth = 1.5;
-      c.beginPath();
-      c.moveTo(h.x - h.r * 0.5, h.y + Math.sin(this.t * 1.3) * 4);
-      c.lineTo(h.x + h.r * 0.5, h.y + Math.sin(this.t * 1.3 + 1) * 4);
-      c.stroke();
-      c.globalAlpha = 1;
-    }
-
-    c.strokeStyle = 'rgba(160, 200, 225, .3)';
-    c.lineWidth = 2;
-    for (let v = 0; v < 5; v++) {
-      const a0 = (v / 5) * Math.PI * 2 + 0.7;
-      c.beginPath();
-      c.moveTo(f.cx + Math.cos(a0) * 40, f.cy + Math.sin(a0) * 40);
-      c.quadraticCurveTo(
-        f.cx + Math.cos(a0 + 0.5) * 190,
-        f.cy + Math.sin(a0 + 0.5) * 190,
-        f.cx + Math.cos(a0 + 0.3) * 330,
-        f.cy + Math.sin(a0 + 0.3) * 330,
-      );
-      c.stroke();
-    }
-    c.restore();
-  }
-
-  private updateSplashes(c: CanvasRenderingContext2D, dtMs: number): void {
-    for (const s of this.splashes) {
-      s.age += dtMs / 1000;
-      for (const mult of [1, 0.6]) {
-        const r = (14 + s.age * 120) * mult;
-        c.beginPath();
-        c.arc(s.x, s.y, r, 0, Math.PI * 2);
-        c.lineWidth = Math.max(7 - s.age * 6, 1) * mult;
-        c.strokeStyle = `rgba(225, 248, 255, ${Math.max(0.85 - s.age, 0)})`;
-        c.stroke();
-      }
-      // droplets
-      c.fillStyle = `rgba(225, 248, 255, ${Math.max(0.9 - s.age * 1.2, 0)})`;
-      for (let d = 0; d < 7; d++) {
-        const a = (d / 7) * Math.PI * 2;
-        const rr = 20 + s.age * 190;
-        c.beginPath();
-        c.arc(s.x + Math.cos(a) * rr, s.y + Math.sin(a) * rr - s.age * 60 + s.age * s.age * 160, 4, 0, Math.PI * 2);
-        c.fill();
-      }
-    }
-    this.splashes = this.splashes.filter((s) => s.age < 1.1);
-  }
-
-  /** Eliminated penguins bob past frozen in an ice cube — the spec's promise. */
-  private updateCubes(c: CanvasRenderingContext2D): void {
-    for (const cube of this.cubes) {
-      const age = this.t - cube.born;
-      if (age < 0.6) continue; // wait for the splash to clear
-      const x = cube.x + Math.sin(this.t * 0.6 + cube.born) * 30 + age * 12;
-      const y = cube.y + Math.sin(this.t * 1.1 + cube.born * 2) * 6;
-      c.save();
-      c.translate(x, y);
-      c.rotate(Math.sin(this.t * 0.8 + cube.born) * 0.12);
-      c.globalAlpha = 0.85;
-      c.fillStyle = 'rgba(190, 226, 248, .8)';
-      c.strokeStyle = '#e8f6ff';
-      c.lineWidth = 3;
-      const S = 30;
-      c.fillRect(-S, -S, S * 2, S * 2);
-      c.strokeRect(-S, -S, S * 2, S * 2);
-      // tiny penguin inside
-      c.beginPath();
-      c.ellipse(0, 2, 12, 15, 0, 0, Math.PI * 2);
-      c.fillStyle = '#1c2733';
-      c.fill();
-      c.beginPath();
-      c.ellipse(0, 5, 7, 9, 0, 0, Math.PI * 2);
-      c.fillStyle = '#f4f8fb';
-      c.fill();
-      c.fillStyle = cube.color;
-      c.fillRect(-8, -6, 16, 5);
-      c.restore();
-      c.globalAlpha = 1;
-    }
-    this.cubes = this.cubes.filter((k) => this.t - k.born < 30);
-  }
-
-  private emitSpray(w: World): void {
-    for (const p of w.penguins) {
-      if (!p.alive || Math.abs(p.steer) < 0.55) continue;
-      const back = p.heading + Math.PI;
-      this.spray.push({
-        x: p.pos.x + Math.cos(back) * TUNE.PENGUIN_RADIUS * 1.4,
-        y: p.pos.y + Math.sin(back) * TUNE.PENGUIN_RADIUS * 1.4,
-        vx: Math.cos(back + (Math.random() - 0.5)) * 90,
-        vy: Math.sin(back + (Math.random() - 0.5)) * 90,
-        age: 0,
-      });
-    }
   }
 
   private updateSpray(c: CanvasRenderingContext2D, dtMs: number): void {
@@ -584,132 +569,13 @@ export class Renderer {
     c.globalAlpha = 1;
     this.spray = this.spray.filter((s) => s.age < (s.color ? 0.9 : 0.5));
   }
+}
 
-  private penguin(c: CanvasRenderingContext2D, p: Penguin): void {
-    const R = TUNE.PENGUIN_RADIUS;
-    const { x, y } = p.pos;
-    const waddle = Math.sin(this.t * 9 + p.slot * 3) * 0.06;
-
-    // motion streak
-    const speed = Math.hypot(p.vel.x, p.vel.y);
-    if (speed > 40) {
-      c.save();
-      c.strokeStyle = `${p.color}44`;
-      c.lineWidth = R * 1.1;
-      c.lineCap = 'round';
-      c.beginPath();
-      c.moveTo(x - p.vel.x * 0.14, y - p.vel.y * 0.14);
-      c.lineTo(x, y);
-      c.stroke();
-      c.restore();
-    }
-
-    c.save();
-    c.translate(x, y);
-    c.beginPath();
-    c.ellipse(0, R * 0.7, R * 1.15, R * 0.45, 0, 0, Math.PI * 2);
-    c.fillStyle = 'rgba(40, 70, 100, .3)';
-    c.fill();
-    c.rotate(p.heading + waddle);
-
-    // little orange feet peeking out, alternating steps while walking
-    const stepPhase = Math.sin(this.t * 13 + p.slot * 2);
-    const stride = speed > 25 ? stepPhase * R * 0.5 : 0;
-    c.fillStyle = '#ff9d3d';
-    for (const side of [-1, 1]) {
-      c.beginPath();
-      c.ellipse(-R * 0.25 + side * stride, side * R * 0.6, R * 0.38, R * 0.22, 0, 0, Math.PI * 2);
-      c.fill();
-    }
-
-    // bird: body, belly, head, eyes, beak, flippers
-    c.beginPath();
-    c.ellipse(-R * 0.1, 0, R * 1.0, R * 0.8, 0, 0, Math.PI * 2);
-    c.fillStyle = '#232f3d';
-    c.fill();
-    c.beginPath();
-    c.ellipse(R * 0.05, 0, R * 0.6, R * 0.5, 0, 0, Math.PI * 2);
-    c.fillStyle = '#f6fafc';
-    c.fill();
-    // flippers trail slightly opposite to steer
-    for (const side of [-1, 1]) {
-      c.save();
-      c.rotate(side * (0.5 + p.steer * side * 0.25));
-      c.beginPath();
-      c.ellipse(-R * 0.5, side * R * 0.62, R * 0.42, R * 0.18, 0, 0, Math.PI * 2);
-      c.fillStyle = '#1a242f';
-      c.fill();
-      c.restore();
-    }
-    // head
-    c.beginPath();
-    c.arc(R * 0.62, 0, R * 0.5, 0, Math.PI * 2);
-    c.fillStyle = '#232f3d';
-    c.fill();
-    for (const side of [-1, 1]) {
-      c.beginPath();
-      c.arc(R * 0.78, side * R * 0.2, R * 0.13, 0, Math.PI * 2);
-      c.fillStyle = '#ffffff';
-      c.fill();
-      c.beginPath();
-      c.arc(R * 0.82, side * R * 0.2, R * 0.06, 0, Math.PI * 2);
-      c.fillStyle = '#10161d';
-      c.fill();
-    }
-    c.beginPath();
-    c.moveTo(R * 1.05, -R * 0.14);
-    c.lineTo(R * 1.5, 0);
-    c.lineTo(R * 1.05, R * 0.14);
-    c.closePath();
-    c.fillStyle = '#ffb400';
-    c.fill();
-    // scarf + tail flapping backwards
-    c.fillStyle = p.color;
-    c.beginPath();
-    c.ellipse(R * 0.28, 0, R * 0.34, R * 0.42, 0, 0, Math.PI * 2);
-    c.fill();
-    c.save();
-    c.rotate(Math.sin(this.t * 7 + p.slot) * 0.15);
-    c.fillRect(-R * 1.15, -R * 0.16, R * 0.8, R * 0.32);
-    c.restore();
-    c.restore();
-
-    // ice shield bubble
-    if (p.shieldMs > 0) {
-      c.save();
-      c.globalAlpha = 0.32 + Math.sin(this.t * 10) * 0.08;
-      c.fillStyle = '#9fdcff';
-      c.strokeStyle = '#e8f8ff';
-      c.lineWidth = 3;
-      c.beginPath();
-      c.arc(x, y, R * 1.9, 0, Math.PI * 2);
-      c.fill();
-      c.stroke();
-      c.restore();
-    }
-
-    // name chip (unrotated)
-    c.font = `bold ${Math.round(R * 0.72)}px "Segoe UI", sans-serif`;
-    c.textAlign = 'center';
-    const label = p.name;
-    const tw = c.measureText(label).width;
-    c.fillStyle = 'rgba(8, 16, 34, .55)';
-    const pad = 7;
-    c.beginPath();
-    c.roundRect(x - tw / 2 - pad, y - R * 2.5, tw + pad * 2, R * 0.95, 6);
-    c.fill();
-    c.fillStyle = p.color;
-    c.fillText(label, x, y - R * 1.82);
-  }
-
-  private vignette(c: CanvasRenderingContext2D): void {
-    const g = c.createRadialGradient(
-      ARENA_W / 2, ARENA_H / 2, ARENA_H * 0.45,
-      ARENA_W / 2, ARENA_H / 2, ARENA_H * 0.95,
-    );
-    g.addColorStop(0, 'transparent');
-    g.addColorStop(1, 'rgba(3, 6, 18, .55)');
-    c.fillStyle = g;
-    c.fillRect(0, 0, ARENA_W, ARENA_H);
-  }
+function mulberry(seed: number): () => number {
+  let t = seed + 0x6d2b79f5;
+  return () => {
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }

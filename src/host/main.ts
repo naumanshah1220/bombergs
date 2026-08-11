@@ -1,12 +1,12 @@
-// Host entry. For this stage of the build it boots straight into the LOBBY +
-// CONTROLLER HARNESS: QR pairing, joined-penguin list, live steer bars and tap
-// flashes — the place where controller feel gets tuned before the game exists.
+// Host entry: lobby with QR pairing → one continuous Fall-Guys-style match
+// (lives, pickups, persistent blast holes) → podium → back to the lobby.
 
 import QRCode from 'qrcode';
-import { PLAYER_COLORS, controllerUrl, type AbilityId } from '../shared/protocol';
+import { PLAYER_COLORS, controllerUrl } from '../shared/protocol';
 import { fuseFrac, idleBomb } from '../sim/bomb';
 import { TUNE, type Tunables } from '../sim/constants';
-import { makeWorld, step, type StageRules, type World } from '../sim/world';
+import { makeWorld, step, type World, type WorldEvent } from '../sim/world';
+import { loadAssets, type Assets } from './assets';
 import { Sfx } from './audio';
 import { Renderer } from './render';
 import { createRoom, type Room } from './net';
@@ -17,28 +17,24 @@ let mode: 'lobby' | 'play' | 'practice' = 'lobby';
 let world: World | undefined;
 let renderer: Renderer | undefined;
 let sfx: Sfx | undefined;
-// Every startStage/startPractice bumps this; stale rAF loops see the bump and
-// die. (A missing guard here once made each new stage silently double the
-// simulation rate — the "game speeds up every round" bug.)
+let assets: Assets | undefined;
+// Every match/practice start bumps this; stale rAF loops see the bump and die.
+// (A missing guard here once made each new stage silently double the sim rate.)
 let loopGen = 0;
 
-const TARGET_POINTS = 3;
-type Score = { slot: number; name: string; color: string; score: number; isBot: boolean; ability?: AbilityId };
-let scores: Score[] = [];
-let stageNo = 0;
-let draftOffers: Map<number, AbilityId[]> | undefined;
-let draftAwaiting: Set<number> = new Set();
-let draftTimer: number | undefined;
-const ABILITY_POOL: AbilityId[] = ['blink', 'dash', 'shield'];
+type Roster = { slot: number; name: string; color: string; isBot: boolean };
+let roster: Roster[] = [];
+let placements: number[] = []; // slots in elimination order (first out first)
 
 function boot(): void {
   app.innerHTML = `<div style="display:grid;place-items:center;height:100%">
     <div style="font-size:24px;opacity:.7">Opening room…</div></div>`;
+  void loadAssets().then((a) => { assets = a; });
   createRoom(
     {
       onJoin: () => renderLobby(),
       onInput: () => { /* play loop polls controller state directly */ },
-      onDraftPick: (slot, index) => onDraftPick(slot, index),
+      onDraftPick: () => { /* drafts retired — abilities are map pickups now */ },
       onLeave: () => renderLobby(),
     },
     (r) => { room = r; renderLobby(); },
@@ -68,35 +64,34 @@ async function renderLobby(): Promise<void> {
   app.innerHTML = `
     <div style="display:flex;height:100%;align-items:center;justify-content:center;gap:70px;padding:40px">
       <div style="text-align:center">
-        <div style="font-size:54px;font-weight:900;letter-spacing:2px">🐧 BOMBERGS</div>
-        <div style="opacity:.6;margin:6px 0 26px">scan to grab a trolley</div>
+        <div style="font-size:54px;font-weight:900;letter-spacing:2px">🧨 BOMBERGS</div>
+        <div style="opacity:.6;margin:6px 0 26px">scan to join the goblins</div>
         <canvas id="qr" style="border-radius:16px"></canvas>
         <div style="font-size:44px;font-weight:800;letter-spacing:14px;margin-top:18px">${room.code}</div>
         <div style="opacity:.5;font-size:14px;margin-top:6px">${join}</div>
         ${insecure ? `<div style="margin-top:14px;padding:10px 16px;border-radius:10px;
             background:#3a2a10;color:#ffb400;font-size:14px;max-width:340px">
-            ⚠️ HTTP mode: phone tilt sensors won't work.<br/>
-            Run <b>npm run dev:phone</b> for HTTPS.</div>` : ''}
+            ⚠️ HTTP mode (dev): fine for joystick controls.</div>` : ''}
       </div>
       <div style="min-width:420px">
-        <div style="font-size:20px;opacity:.7;margin-bottom:14px">PENGUINS</div>
+        <div style="font-size:20px;opacity:.7;margin-bottom:14px">GOBLINS</div>
         <div id="plist" style="display:flex;flex-direction:column;gap:12px"></div>
         <button id="start" style="margin-top:22px;font-size:22px;padding:14px 46px;
           border-radius:14px;border:none;background:#3DDC84;color:#04121f;
           font-weight:800;cursor:pointer">START (bots fill empty seats)</button>
         <button id="practice" style="margin-top:12px;font-size:17px;padding:11px 34px;
           border-radius:12px;border:2px solid #29B6F6;background:transparent;color:#29B6F6;
-          font-weight:700;cursor:pointer;display:block">🎯 PRACTICE — drive around, tune the controls</button>
+          font-weight:700;cursor:pointer;display:block">🎯 PRACTICE — walk around, tune the controls</button>
       </div>
     </div>`;
-  document.getElementById('start')!.addEventListener('click', startGame);
+  document.getElementById('start')!.addEventListener('click', startMatch);
   document.getElementById('practice')!.addEventListener('click', startPractice);
   const qrCanvas = document.getElementById('qr') as HTMLCanvasElement;
   await QRCode.toCanvas(qrCanvas, join, { width: 240, margin: 1, color: { dark: '#0b1026', light: '#eaf6ff' } });
   renderList();
 }
 
-const DUMMY_NAMES = ['Bot Bergy', 'Bot Floe', 'Bot Chilly'];
+const BOT_NAMES = ['Bot Grubb', 'Bot Snout', 'Bot Wick'];
 
 /** Live sliders over the mutable TUNE constants (?tune=1, or always in practice). */
 function mountTunePanel(force = false): void {
@@ -137,63 +132,194 @@ function mountTunePanel(force = false): void {
   }
   const note = document.createElement('div');
   note.style.cssText = 'opacity:.5;margin-top:4px';
-  note.textContent = 'FLOE_RADIUS applies next stage';
+  note.textContent = 'FLOE_RADIUS applies next match';
   wrap.appendChild(note);
   document.body.appendChild(wrap);
 }
 
-function startGame(): void {
-  // Fresh match from the lobby: build the roster and zero the scores.
-  if (!room) return;
-  const players = [...room.controllers.values()]
+function buildRoster(): Roster[] {
+  if (!room) return [];
+  const players: Roster[] = [...room.controllers.values()]
     .filter((c) => c.connected)
     .map((c) => ({ slot: c.slot, name: c.name, color: c.color, isBot: false }));
   const taken = new Set(players.map((p) => p.slot));
   for (let i = 0; players.length < 4 && i < PLAYER_COLORS.length; i++) {
     if (taken.has(i)) continue;
     const botCount = players.filter((p) => p.isBot).length;
-    players.push({ slot: i, name: DUMMY_NAMES[botCount] ?? `Bot ${i}`, color: PLAYER_COLORS[i], isBot: true });
+    players.push({ slot: i, name: BOT_NAMES[botCount] ?? `Bot ${i}`, color: PLAYER_COLORS[i], isBot: true });
     taken.add(i);
   }
-  scores = players.map((p) => ({ slot: p.slot, name: p.name, color: p.color, score: 0, isBot: p.isBot }));
-  stageNo = 0;
+  return players;
+}
+
+function renderLivesBar(): void {
+  const bar = document.getElementById('livesbar');
+  if (!bar || !world) return;
+  bar.innerHTML = roster
+    .map((r) => {
+      const p = world!.penguins.find((q) => q.slot === r.slot);
+      if (!p) return '';
+      const hearts = p.alive ? '❤'.repeat(p.lives) : '💀';
+      return `<span style="background:rgba(6,12,30,.72);border-left:5px solid ${r.color};
+        padding:5px 12px;border-radius:8px;margin-right:8px;font-weight:700;
+        opacity:${p.alive ? 1 : 0.45}">${r.name} <span style="color:#ff5a6e">${hearts}</span></span>`;
+    })
+    .join('');
+}
+
+function gameScreenDom(bannerHtml: string): void {
+  app.innerHTML = `<canvas id="arena" style="width:100%;height:100%;display:block"></canvas>
+    <div id="livesbar" style="position:fixed;top:14px;left:16px;font-size:15px;pointer-events:none"></div>
+    <div id="banner" style="position:fixed;top:80px;left:0;right:0;text-align:center;
+      font-size:40px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);
+      pointer-events:none">${bannerHtml}</div>`;
+}
+
+function playSfx(e: WorldEvent): void {
+  switch (e.kind) {
+    case 'explode': sfx?.explosion(); break;
+    case 'splash': sfx?.splash(); break;
+    case 'honk': sfx?.honk(); break;
+    case 'throw': sfx?.throwWhoosh(); break;
+    case 'stick': sfx?.stick(); break;
+    case 'blink': sfx?.blink(); break;
+    case 'shieldUp': sfx?.shield(); break;
+    case 'dash': sfx?.throwWhoosh(); break;
+    case 'bounce': sfx?.stick(); break;
+    case 'pickup': sfx?.blink(); break;
+  }
+}
+
+/** Shared per-frame plumbing: inputs in, bomb state out to phones. */
+function makeLoopHelpers(): {
+  applyInputs: () => void;
+  syncBombPhones: (now: number) => void;
+} {
+  const prevTaps = new Map<number, boolean>();
+  let lastCarrier: number | undefined;
+  let lastFuseSend = 0;
+  return {
+    applyInputs() {
+      if (!room || !world) return;
+      for (const c of room.controllers.values()) {
+        const p = world.penguins.find((q) => q.slot === c.slot);
+        if (!p || p.isDummy) continue;
+        p.steer = c.steer;
+        p.throttle = c.throttle;
+        p.move = c.move;
+        if (c.tap && !prevTaps.get(c.slot)) p.tap = true; // rising edge only
+        prevTaps.set(c.slot, c.tap);
+      }
+    },
+    syncBombPhones(now: number) {
+      if (!room || !world) return;
+      const carrier = world.bomb.s === 'carried' ? world.bomb.slot : undefined;
+      const frac = fuseFrac(world.bomb);
+      if (carrier !== lastCarrier) {
+        if (lastCarrier !== undefined) room.sendTo(lastCarrier, { t: 'bomb', carrying: false, fuseFrac: 0 });
+        if (carrier !== undefined) room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
+        lastCarrier = carrier;
+        lastFuseSend = now;
+      } else if (carrier !== undefined && now - lastFuseSend > 250) {
+        room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
+        lastFuseSend = now;
+      }
+    },
+  };
+}
+
+/** One continuous match: 3 lives each, pickups, holes that stay. Last goblin wins. */
+function startMatch(): void {
+  if (!room) return;
+  if (!assets) { setTimeout(startMatch, 300); return; } // sprites still loading
+  roster = buildRoster();
+  placements = [];
   mode = 'play';
   sfx ??= new Sfx(); // constructed on the START click = user gesture
   sfx.resume();
   mountTunePanel();
-  startStage();
-}
+  world = makeWorld(roster.map((r) => ({ slot: r.slot, name: r.name, color: r.color, isDummy: r.isBot })));
+  gameScreenDom(`LAST GOBLIN STANDING 💣<br/>
+    <span style="font-size:20px;opacity:.85">3 lives each · grab crates for abilities · hearts heal</span>`);
+  renderLivesBar();
+  renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement, assets);
+  room.broadcast({ t: 'phase', phase: 'play' });
+  setTimeout(() => { const b = document.getElementById('banner'); if (b) b.textContent = ''; }, 3000);
 
-function renderScorebar(): void {
-  const bar = document.getElementById('scorebar');
-  if (!bar) return;
-  bar.innerHTML = [...scores]
-    .sort((a, b) => b.score - a.score)
-    .map((s) => `<span style="background:rgba(6,12,30,.72);border-left:5px solid ${s.color};
-        padding:5px 12px;border-radius:8px;margin-right:8px;font-weight:700">
-        ${s.name} ${'●'.repeat(s.score)}${'○'.repeat(Math.max(TARGET_POINTS - s.score, 0))}</span>`)
-    .join('');
-}
+  const gen = ++loopGen;
+  let last = performance.now();
+  let matchOver = false;
+  const helpers = makeLoopHelpers();
 
-/** Complexity ramps in: bumper rim first, deadly water at 3, breaking ice at 4. */
-function rulesForStage(n: number): StageRules {
-  return { bomb: true, edgeDeath: n >= 3, floeBreak: n >= 4 };
-}
+  const loop = (now: number): void => {
+    if (gen !== loopGen || mode !== 'play' || !world || !renderer || !room) return;
+    const dt = Math.min(now - last, 50);
+    last = now;
 
-function stageAnnouncement(n: number): string {
-  if (n === 3) return `STAGE 3 — THE WATER WAKES UP 🌊<br/>
-    <span style="font-size:22px;opacity:.85">falling off the ice now ELIMINATES you!</span>`;
-  if (n === 4) return `STAGE 4 — THE ICE CRACKS 💥<br/>
-    <span style="font-size:22px;opacity:.85">explosions blow chunks off the floe!</span>`;
-  return `STAGE ${n}`;
+    helpers.applyInputs();
+    const events = step(world, dt);
+    renderer.addEvents(events, world);
+    for (const e of events) {
+      playSfx(e);
+      if (e.kind === 'lifeLost' || e.kind === 'pickup') renderLivesBar();
+      if (e.kind === 'pickup' && e.pkind === 'crate' && e.ability) {
+        room.sendTo(e.slot, { t: 'ability', id: e.ability });
+      }
+      if (e.kind === 'eliminated') {
+        placements.push(e.slot);
+        renderLivesBar();
+        const placement = world.penguins.filter((q) => q.alive).length + 1;
+        room.sendTo(e.slot, { t: 'status', alive: false, placement, score: 0 });
+      }
+    }
+    helpers.syncBombPhones(now);
+
+    // Match ends with one goblin left — or when every human is out.
+    const alive = world.penguins.filter((q) => q.alive);
+    const humansAlive = alive.filter((q) => !q.isDummy).length;
+    const hadHumans = world.penguins.some((q) => !q.isDummy);
+    if (!matchOver && (alive.length <= 1 || (hadHumans && humansAlive === 0))) {
+      matchOver = true;
+      const winner = alive[0];
+      if (winner) {
+        placements.push(...alive.map((q) => q.slot));
+        sfx?.fanfare();
+        room.sendTo(winner.slot, { t: 'status', alive: false, placement: 1, score: 1 });
+      }
+      const order = [...placements].reverse(); // winner first
+      const standings = order
+        .map((slot, i) => {
+          const r = roster.find((q) => q.slot === slot);
+          return `${['🏆', '🥈', '🥉'][i] ?? `${i + 1}.`} ${r?.name ?? '?'}`;
+        })
+        .join('<br/>');
+      const b = document.getElementById('banner');
+      if (b) {
+        b.innerHTML = `<span style="font-size:52px">${winner ? `${roster.find((q) => q.slot === winner.slot)?.name} WINS!` : 'EVERYONE EXPLODED 💥'}</span><br/>
+          <span style="font-size:24px;line-height:1.6">${standings}</span><br/>
+          <span style="font-size:18px;opacity:.7">back to the lobby in a moment…</span>`;
+      }
+      room.broadcast({ t: 'phase', phase: 'gameover' });
+      setTimeout(() => {
+        mode = 'lobby';
+        room?.broadcast({ t: 'phase', phase: 'lobby' });
+        void renderLobby();
+      }, 8000);
+    }
+
+    renderer.draw(world, dt);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
 }
 
 /**
- * Practice arena: no bomb, no eliminations, no stage end. Drive, bump the
- * training bot, fall in and get fished back out — and tune the sliders.
+ * Practice arena: endless lives, no match end. Walk, bump Coach Grubb, fall
+ * in and climb back out — and tune the sliders. B toggles a practice bomb.
  */
 function startPractice(): void {
   if (!room) return;
+  if (!assets) { setTimeout(startPractice, 300); return; }
   mode = 'practice';
   sfx ??= new Sfx();
   sfx.resume();
@@ -201,78 +327,41 @@ function startPractice(): void {
     .filter((c) => c.connected)
     .map((c) => ({ slot: c.slot, name: c.name, color: c.color }));
   const botSlot = [...Array(8).keys()].find((i) => !humans.some((h) => h.slot === i)) ?? 7;
+  roster = [
+    ...humans.map((h) => ({ ...h, isBot: false })),
+    { slot: botSlot, name: 'Coach Grubb', color: PLAYER_COLORS[botSlot], isBot: true },
+  ];
   world = makeWorld(
-    [...humans, { slot: botSlot, name: 'Coach Berg', color: PLAYER_COLORS[botSlot] }],
+    roster.map((r) => ({ slot: r.slot, name: r.name, color: r.color, isDummy: r.isBot })),
     Math.random,
-    // bomb-free by default: pure driving. B summons/dismisses the bomb.
-    { bomb: false, edgeDeath: true, floeBreak: false },
+    // bomb-free by default: pure walking. B summons/dismisses the bomb.
+    { bomb: false, edgeDeath: true, floeBreak: false, lives: 9999 },
   );
-  const coach = world.penguins.find((p) => p.slot === botSlot)!;
-  coach.isDummy = true;
-  app.innerHTML = `<canvas id="arena" style="width:100%;height:100%;display:block"></canvas>
-    <div id="banner" style="position:fixed;top:24px;left:0;right:0;text-align:center;
-      font-size:30px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);pointer-events:none">
-      🎯 PRACTICE ARENA</div>
-    <div style="position:fixed;bottom:18px;left:0;right:0;text-align:center;font-size:16px;
-      opacity:.75;pointer-events:none">free driving — falling in just respawns you ·
-      <b>B</b> = practice bomb on/off · tune sliders on the right · <b>L</b> = back to lobby</div>`;
-  renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement);
+  gameScreenDom('🎯 PRACTICE ARENA');
+  const hint = document.createElement('div');
+  hint.style.cssText = `position:fixed;bottom:18px;left:0;right:0;text-align:center;
+    font-size:16px;opacity:.75;pointer-events:none`;
+  hint.innerHTML = `free walking — falling in just respawns you ·
+    <b>B</b> = practice bomb on/off · tune sliders on the right · <b>L</b> = back to lobby`;
+  document.body.appendChild(hint);
+  const cleanupHint = () => hint.remove();
+  renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement, assets);
   mountTunePanel(true);
   room.broadcast({ t: 'phase', phase: 'play' });
 
   const gen = ++loopGen;
   let last = performance.now();
-  const prevTaps = new Map<number, boolean>();
-  let lastCarrier: number | undefined;
-  let lastFuseSend = 0;
+  const helpers = makeLoopHelpers();
 
   const loop = (now: number): void => {
-    if (gen !== loopGen || mode !== 'practice' || !world || !renderer || !room) return;
+    if (gen !== loopGen || mode !== 'practice' || !world || !renderer || !room) { cleanupHint(); return; }
     const dt = Math.min(now - last, 50);
     last = now;
-    for (const c of room.controllers.values()) {
-      const p = world.penguins.find((q) => q.slot === c.slot);
-      if (!p || p.isDummy) continue;
-      p.steer = c.steer;
-      p.throttle = c.throttle;
-      p.move = c.move;
-      if (c.tap && !prevTaps.get(c.slot)) p.tap = true;
-      prevTaps.set(c.slot, c.tap);
-    }
+    helpers.applyInputs();
     const events = step(world, dt);
-    // no deaths here: splashes, blasts — everyone climbs right back on
-    renderer.addEvents(events.filter((e) => e.kind !== 'eliminated' && e.kind !== 'launched'), world);
-    for (const e of events) {
-      switch (e.kind) {
-        case 'eliminated': {
-          const p = world.penguins.find((q) => q.slot === e.slot);
-          if (p) {
-            p.alive = true;
-            p.pos = { x: world.floe.cx, y: world.floe.cy };
-            p.vel = { x: 0, y: 0 };
-          }
-          break;
-        }
-        case 'splash': sfx?.splash(); break;
-        case 'explode': sfx?.explosion(); break;
-        case 'honk': sfx?.honk(); break;
-        case 'throw': sfx?.throwWhoosh(); break;
-        case 'stick': sfx?.stick(); break;
-        case 'bounce': sfx?.stick(); break;
-      }
-    }
-    // carrier phone still becomes the bomb in practice — that's the point
-    const carrier = world.bomb.s === 'carried' ? world.bomb.slot : undefined;
-    const frac = fuseFrac(world.bomb);
-    if (carrier !== lastCarrier) {
-      if (lastCarrier !== undefined) room.sendTo(lastCarrier, { t: 'bomb', carrying: false, fuseFrac: 0 });
-      if (carrier !== undefined) room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
-      lastCarrier = carrier;
-      lastFuseSend = now;
-    } else if (carrier !== undefined && now - lastFuseSend > 250) {
-      room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
-      lastFuseSend = now;
-    }
+    renderer.addEvents(events, world);
+    for (const e of events) playSfx(e);
+    helpers.syncBombPhones(now);
     renderer.draw(world, dt);
     requestAnimationFrame(loop);
   };
@@ -294,179 +383,6 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-/**
- * Between stages: everyone picks 1 of 3 abilities on their own phone.
- * 12 seconds, bots pick instantly, stragglers get a random one.
- */
-function runDraft(): void {
-  if (!room) return;
-  draftOffers = new Map();
-  draftAwaiting = new Set();
-  for (const s of scores) {
-    const options = [...ABILITY_POOL].sort(() => Math.random() - 0.5);
-    if (s.isBot) {
-      s.ability = options[Math.floor(Math.random() * options.length)];
-      continue;
-    }
-    const conn = room.controllers.get(s.slot);
-    if (!conn?.connected) { s.ability ??= undefined; continue; }
-    draftOffers.set(s.slot, options);
-    draftAwaiting.add(s.slot);
-    room.sendTo(s.slot, { t: 'draftOffer', options });
-  }
-  const b = document.getElementById('banner');
-  if (b) b.innerHTML = `PICK YOUR ABILITY 📱<br/><span style="font-size:20px;opacity:.8">on your phone…</span>`;
-  if (draftAwaiting.size === 0) { startStage(); return; }
-  draftTimer = window.setTimeout(() => {
-    // stragglers draft blind
-    for (const slot of draftAwaiting) {
-      const s = scores.find((q) => q.slot === slot);
-      const opts = draftOffers?.get(slot) ?? ABILITY_POOL;
-      if (s) s.ability = opts[Math.floor(Math.random() * opts.length)];
-    }
-    finishDraft();
-  }, 12000);
-}
-
-function onDraftPick(slot: number, index: 0 | 1 | 2): void {
-  if (!draftOffers || !draftAwaiting.has(slot)) return;
-  const s = scores.find((q) => q.slot === slot);
-  const opts = draftOffers.get(slot);
-  if (s && opts) s.ability = opts[index] ?? opts[0];
-  draftAwaiting.delete(slot);
-  if (draftAwaiting.size === 0) finishDraft();
-}
-
-function finishDraft(): void {
-  if (draftTimer) clearTimeout(draftTimer);
-  draftTimer = undefined;
-  draftOffers = undefined;
-  if (mode === 'play') startStage();
-}
-
-function startStage(): void {
-  if (!room) return;
-  stageNo++;
-  world = makeWorld(
-    scores.map((s) => ({
-      slot: s.slot, name: s.name, color: s.color, isDummy: s.isBot, ability: s.ability,
-    })),
-    Math.random,
-    rulesForStage(stageNo),
-  );
-  const isRuleStage = stageNo === 3 || stageNo === 4;
-  app.innerHTML = `<canvas id="arena" style="width:100%;height:100%;display:block"></canvas>
-    <div id="scorebar" style="position:fixed;top:14px;left:16px;font-size:15px;pointer-events:none"></div>
-    <div id="banner" style="position:fixed;top:80px;left:0;right:0;text-align:center;
-      font-size:40px;font-weight:900;text-shadow:0 2px 12px rgba(0,0,0,.6);
-      pointer-events:none">${stageAnnouncement(stageNo)}</div>`;
-  renderScorebar();
-  renderer = new Renderer(document.getElementById('arena') as HTMLCanvasElement);
-  room.broadcast({ t: 'phase', phase: 'play' });
-  setTimeout(() => { const b = document.getElementById('banner'); if (b) b.textContent = ''; }, isRuleStage ? 3400 : 1600);
-
-  const gen = ++loopGen; // kills any previous stage's loop
-  let last = performance.now();
-  let stageOver = false;
-  const prevTaps = new Map<number, boolean>();
-  let lastCarrier: number | undefined;
-  let lastFuseSend = 0;
-
-  const loop = (now: number): void => {
-    if (gen !== loopGen || mode !== 'play' || !world || !renderer || !room) return;
-    const dt = Math.min(now - last, 50);
-    last = now;
-
-    for (const c of room.controllers.values()) {
-      const p = world.penguins.find((q) => q.slot === c.slot);
-      if (!p || p.isDummy) continue;
-      p.steer = c.steer;
-      p.throttle = c.throttle;
-      p.move = c.move;
-      if (c.tap && !prevTaps.get(c.slot)) p.tap = true; // rising edge only
-      prevTaps.set(c.slot, c.tap);
-    }
-
-    const events = step(world, dt);
-    renderer.addEvents(events, world);
-    for (const e of events) {
-      switch (e.kind) {
-        case 'eliminated': {
-          const placement = world.penguins.filter((q) => q.alive).length + 1;
-          const s = scores.find((q) => q.slot === e.slot);
-          room.sendTo(e.slot, { t: 'status', alive: false, placement, score: s?.score ?? 0 });
-          break;
-        }
-        case 'explode': sfx?.explosion(); break;
-        case 'splash': sfx?.splash(); break;
-        case 'honk': sfx?.honk(); break;
-        case 'throw': sfx?.throwWhoosh(); break;
-        case 'stick': sfx?.stick(); break;
-        case 'blink': sfx?.blink(); break;
-        case 'shieldUp': sfx?.shield(); break;
-        case 'dash': sfx?.throwWhoosh(); break;
-        case 'bounce': sfx?.stick(); break;
-      }
-    }
-
-    // Phone-becomes-the-bomb: notify carrier changes + fuse progress at 4Hz.
-    const carrier = world.bomb.s === 'carried' ? world.bomb.slot : undefined;
-    const frac = fuseFrac(world.bomb);
-    if (carrier !== lastCarrier) {
-      if (lastCarrier !== undefined) room.sendTo(lastCarrier, { t: 'bomb', carrying: false, fuseFrac: 0 });
-      if (carrier !== undefined) room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
-      lastCarrier = carrier;
-      lastFuseSend = now;
-    } else if (carrier !== undefined && now - lastFuseSend > 250) {
-      room.sendTo(carrier, { t: 'bomb', carrying: true, fuseFrac: frac });
-      lastFuseSend = now;
-    }
-
-    // Stage ends when one penguin remains — or when every HUMAN is out
-    // (nobody wants to spectate bots forever).
-    const alive = world.penguins.filter((q) => q.alive);
-    const humansAlive = alive.filter((q) => !q.isDummy).length;
-    const hadHumans = world.penguins.some((q) => !q.isDummy);
-    if (!stageOver && (alive.length <= 1 || (hadHumans && humansAlive === 0))) {
-      stageOver = true;
-      const winner = alive.length === 1 ? alive[0] : undefined;
-      const ws = winner && scores.find((q) => q.slot === winner.slot);
-      if (ws) ws.score++;
-      if (winner) sfx?.fanfare();
-      renderScorebar();
-      const champion = ws && ws.score >= TARGET_POINTS ? ws : undefined;
-      const b = document.getElementById('banner');
-      if (b) {
-        if (champion) {
-          const standings = [...scores].sort((x, z) => z.score - x.score)
-            .map((s, i) => `${i === 0 ? '🏆' : ['🥈', '🥉', '4.'][i - 1] ?? `${i + 1}.`} ${s.name} — ${s.score}`)
-            .join('<br/>');
-          b.innerHTML = `<span style="font-size:52px">${champion.name} WINS THE MATCH!</span><br/>
-            <span style="font-size:24px;line-height:1.6">${standings}</span><br/>
-            <span style="font-size:18px;opacity:.7">back to the lobby in a moment…</span>`;
-        } else {
-          b.innerHTML = `${winner ? `${winner.name} takes the stage! 🏆` : 'EVERYONE IS SWIMMING 🌊'}<br/>
-            <span style="font-size:20px;opacity:.8">next stage in 3…</span>`;
-        }
-      }
-      if (champion) {
-        room.broadcast({ t: 'phase', phase: 'gameover' });
-        setTimeout(() => {
-          mode = 'lobby';
-          room?.broadcast({ t: 'phase', phase: 'lobby' });
-          void renderLobby();
-        }, 8000);
-      } else {
-        setTimeout(() => { if (mode === 'play') runDraft(); }, 2600);
-      }
-    }
-
-    renderer.draw(world, dt);
-    requestAnimationFrame(loop);
-  };
-  requestAnimationFrame(loop);
-}
-
 function renderList(): void {
   const list = document.getElementById('plist');
   if (!list || !room) return;
@@ -476,7 +392,7 @@ function renderList(): void {
       <div style="display:flex;align-items:center;gap:14px;background:#131a3a;
                   border-radius:14px;padding:12px 16px;border-left:8px solid ${c.color};
                   opacity:${c.connected ? 1 : 0.4}">
-        <div style="font-size:26px">🐧</div>
+        <div style="font-size:26px">👺</div>
         <div style="width:110px;font-weight:700">${escapeHtml(c.name)}${c.connected ? '' : ' (lost)'}</div>
         <div style="flex:1;height:10px;background:#0b1026;border-radius:5px;position:relative;overflow:hidden">
           <div id="steer-${c.slot}" style="position:absolute;top:0;bottom:0;left:50%;width:2%;
@@ -488,7 +404,7 @@ function renderList(): void {
   }
   list.innerHTML = rows.length
     ? rows.join('')
-    : `<div style="opacity:.4">No penguins yet — scan the code!</div>`;
+    : `<div style="opacity:.4">No goblins yet — scan the code!</div>`;
 }
 
 function escapeHtml(s: string): string {
@@ -497,13 +413,14 @@ function escapeHtml(s: string): string {
 
 // 30Hz harness refresh: move steer bars + flash taps without rebuilding DOM.
 setInterval(() => {
-  if (!room) return;
+  if (!room || mode !== 'lobby') return;
   for (const c of room.controllers.values()) {
     const bar = document.getElementById(`steer-${c.slot}`);
     if (bar) {
-      const halfPct = Math.abs(c.steer) * 48;
+      const mx = c.move?.x ?? c.steer;
+      const halfPct = Math.abs(mx) * 48;
       bar.style.width = `${Math.max(halfPct, 2)}%`;
-      bar.style.left = c.steer < 0 ? `${50 - halfPct}%` : '50%';
+      bar.style.left = mx < 0 ? `${50 - halfPct}%` : '50%';
     }
     const tap = document.getElementById(`tap-${c.slot}`);
     if (tap) tap.style.background = c.tap ? c.color : '#0b1026';

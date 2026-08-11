@@ -11,6 +11,7 @@ function playStage(seed: number): { events: WorldEvent[]; ms: number; survivors:
       slot: i, name: `B${i}`, color: PLAYER_COLORS[i], isDummy: true,
     })),
     () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff),
+    { bomb: true, edgeDeath: true, floeBreak: true, lives: 1 }, // sudden-death soak keeps it fast
   );
   const events: WorldEvent[] = [];
   let ms = 0;

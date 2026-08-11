@@ -43,15 +43,18 @@ describe('delivery', () => {
 });
 
 describe('fuse', () => {
-  it('explodes the carrier at fuse end and punches a fall-in hole', () => {
+  it('explodes: carrier loses a life, gets launched, hole punched', () => {
     const w = world(3);
     tickMs(w, BOMB.IDLE_MS + BOMB.SKUA_MS + 50);
     const carrier = w.bomb.s === 'carried' ? w.bomb.slot : -1;
     const events = tickMs(w, BOMB.FUSE_MAX_MS + 100);
     const boom = events.find((e) => e.kind === 'explode');
     expect(boom).toBeDefined();
-    expect(w.penguins.find((p) => p.slot === carrier)?.alive).toBe(false);
-    expect(w.floe.holes).toHaveLength(1);
+    const victim = w.penguins.find((p) => p.slot === carrier)!;
+    expect(victim.alive).toBe(true); // lives system: hurt, not out
+    expect(victim.lives).toBeLessThan(3);
+    expect(events.some((e) => e.kind === 'launched' && e.slot === carrier)).toBe(true);
+    expect(w.floe.holes.length).toBeGreaterThanOrEqual(1);
     if (boom && 'at' in boom) expect(contains(w.floe, boom.at)).toBe(false); // open water now
   });
 });
@@ -104,14 +107,14 @@ describe('ground bomb', () => {
     expect(w.bomb.s).toBe('carried');
   });
 
-  it('explodes in place, eliminating anyone in blast radius', () => {
+  it('explodes in place, costing a life to anyone in blast radius', () => {
     const w = world(3);
     w.bomb = { s: 'ground', pos: { x: w.penguins[1].pos.x + 500, y: w.penguins[1].pos.y }, fuseMs: 40, fuseTotal: 15000 };
     w.penguins[2].pos = { x: w.penguins[1].pos.x + 500 + BOMB.BLAST_RADIUS - 5, y: w.penguins[1].pos.y };
     const events = tickMs(w, 100);
     expect(events.some((e) => e.kind === 'explode')).toBe(true);
-    expect(w.penguins[2].alive).toBe(false);
-    expect(w.penguins[1].alive).toBe(true);
+    expect(w.penguins[2].lives).toBe(2);
+    expect(w.penguins[1].lives).toBe(3); // out of radius, untouched
   });
 });
 
