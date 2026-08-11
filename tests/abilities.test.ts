@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ABILITY_COOLDOWN_MS, SHIELD_MS, useAbility } from '../src/sim/abilities';
 import { BOMB } from '../src/sim/bomb';
-import { contains } from '../src/sim/floe';
+import { cellAt } from '../src/sim/island';
 import { makeWorld, step, type World } from '../src/sim/world';
 
+import { ARENA_H, ARENA_W } from '../src/sim/constants';
+const CX = ARENA_W / 2;
+const CY = ARENA_H / 2;
 const rand = () => 0.5;
 
 function world(n: number, ability?: 'blink' | 'dash' | 'shield'): World {
@@ -11,8 +14,10 @@ function world(n: number, ability?: 'blink' | 'dash' | 'shield'): World {
     Array.from({ length: n }, (_, i) => ({ slot: i, name: `P${i}`, color: '#fff', ability })),
     rand,
   );
+  w.island.cells.fill(1);
+  w.island.version++;
   w.penguins.forEach((p, i) => {
-    p.pos = { x: w.floe.cx + i * 200 - 200, y: w.floe.cy };
+    p.pos = { x: CX + i * 200 - 200, y: CY };
     p.vel = { x: 0, y: 0 };
   });
   return w;
@@ -26,7 +31,7 @@ describe('blink', () => {
     const events = useAbility(w, p, Math.random);
     expect(events.some((e) => e.kind === 'blink')).toBe(true);
     expect(p.pos).not.toEqual(before);
-    expect(contains(w.floe, p.pos)).toBe(true);
+    expect(cellAt(w.island, p.pos.x, p.pos.y)).toBe(1);
     expect(p.ability!.cooldownMs).toBe(ABILITY_COOLDOWN_MS.blink);
   });
 
@@ -93,7 +98,7 @@ describe('tap routing in step()', () => {
     p.heading = 0;
     p.tap = true;
     // keep them out of contact range so the pass logic stays quiet
-    p.pos = { x: w.floe.cx + 300, y: w.floe.cy + 300 };
+    p.pos = { x: CX + 300, y: CY + 300 };
     const events = step(w, 16);
     expect(events.some((e) => e.kind === 'dash' && e.slot === p.slot)).toBe(true);
   });

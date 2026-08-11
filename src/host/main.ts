@@ -103,7 +103,6 @@ function mountTunePanel(force = false): void {
     TURN_RATE: [1, 8],
     ICE_GRIP: [1, 12],
     PENGUIN_RADIUS: [10, 40],
-    FLOE_RADIUS: [200, 620],
     BOT_SPEED_MULT: [0.4, 1.2],
     STICK_GRIP_MULT: [1, 3],
   };
@@ -132,7 +131,7 @@ function mountTunePanel(force = false): void {
   }
   const note = document.createElement('div');
   note.style.cssText = 'opacity:.5;margin-top:4px';
-  note.textContent = 'FLOE_RADIUS applies next match';
+  note.textContent = 'physics apply live';
   wrap.appendChild(note);
   document.body.appendChild(wrap);
 }

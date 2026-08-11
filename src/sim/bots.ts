@@ -5,12 +5,13 @@
 //   4. Otherwise wander.
 
 import { BOMB, carrierSlot } from './bomb';
-import { contains, marginAt } from './floe';
+import { ARENA_H, ARENA_W } from './constants';
+import { isGround } from './island';
 import type { Penguin, World } from './world';
 
-export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean } {
+export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; throttle?: number } {
   const edge = edgeAvoid(w, p);
-  if (edge !== undefined) return { steer: edge, tap: false };
+  if (edge !== undefined) return { steer: edge, tap: false, throttle: 0.3 }; // brake while turning away
 
   const carrier = carrierSlot(w.bomb);
 
@@ -88,9 +89,12 @@ function edgeAvoid(w: World, p: Penguin): number | undefined {
     x: p.pos.x + Math.cos(p.heading) * lookAhead,
     y: p.pos.y + Math.sin(p.heading) * lookAhead,
   };
-  const margin = marginAt(w.floe, ahead);
-  if (margin >= 50 && contains(w.floe, ahead)) return undefined; // also catches blast holes
-  const toCenter = Math.atan2(w.floe.cy - p.pos.y, w.floe.cx - p.pos.x);
+  const mid = {
+    x: p.pos.x + Math.cos(p.heading) * lookAhead * 0.5,
+    y: p.pos.y + Math.sin(p.heading) * lookAhead * 0.5,
+  };
+  if (isGround(w.island, ahead) && isGround(w.island, mid)) return undefined;
+  const toCenter = Math.atan2(ARENA_H / 2 - p.pos.y, ARENA_W / 2 - p.pos.x);
   return turnToward(p.heading, toCenter);
 }
 

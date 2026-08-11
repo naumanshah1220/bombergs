@@ -5,11 +5,16 @@ import { ABILITY_POOL, abilityTick, useAbility } from './abilities';
 import { bombStep, carrierSlot, idleBomb, markDodge, type BombState } from './bomb';
 import { botInputs } from './bots';
 import {
-  ARENA_H, ARENA_W, FLOE_SCALE_X, FLOE_WOBBLE, INVULN_MS, MAX_LIVES,
+  GRID_COLS, GRID_ROWS, INVULN_MS, MAX_LIVES,
   MAX_PICKUPS, PICKUP_INTERVAL_MS, PICKUP_RADIUS, START_LIVES, TUNE,
 } from './constants';
-import { contains, makeFloe, marginAt, radiusAt, toFloeSpace, type Floe, type Vec2 } from './floe';
+import {
+  cellAt, cellCenter, generateIsland, groundCells, isGround,
+  type Island, type Vec2,
+} from './island';
 import type { AbilityId } from '../shared/protocol';
+
+export type { Vec2 };
 
 export type Penguin = {
   slot: number;
@@ -31,28 +36,11 @@ export type Penguin = {
   shieldMs: number;  // >0 = ice shield up
 };
 
-export type WorldEvent =
-  | { kind: 'splash'; slot: number; at: Vec2 }
-  | { kind: 'eliminated'; slot: number }
-  | { kind: 'delivered'; slot: number }   // skua picked its victim
-  | { kind: 'stick'; slot: number }       // bomb attached to a penguin
-  | { kind: 'throw'; slot: number }
-  | { kind: 'honk'; slot: number }        // tap with nothing to do
-  | { kind: 'explode'; at: Vec2 }
-  | { kind: 'launched'; slot: number; at: Vec2 } // blasted skyward
-  | { kind: 'blink'; slot: number; from: Vec2; to: Vec2 }
-  | { kind: 'dash'; slot: number }
-  | { kind: 'shieldUp'; slot: number }
-  | { kind: 'ricochet'; slot: number }           // shield bounced a landing bomb
-  | { kind: 'bounce'; slot: number; at: Vec2 }   // soft rim bump (practice)
-  | { kind: 'lifeLost'; slot: number; lives: number; at: Vec2 }
-  | { kind: 'pickup'; slot: number; pkind: 'heart' | 'crate'; ability?: AbilityId };
-
 /** Match dials. */
 export type StageRules = {
   bomb: boolean;      // is the bomb in play at all? (practice starts without)
-  edgeDeath: boolean; // false: the rim is a soft bumper; true: water costs a life
-  floeBreak: boolean; // do explosions punch holes?
+  edgeDeath: boolean; // false: water is a wall (practice); true: water costs a life
+  floeBreak: boolean; // do explosions destroy tiles?
   lives: number;      // starting lives (practice uses a huge number)
 };
 
@@ -65,9 +53,26 @@ export type Pickup = {
   bornTick: number;
 };
 
+export type WorldEvent =
+  | { kind: 'splash'; slot: number; at: Vec2 }
+  | { kind: 'eliminated'; slot: number }
+  | { kind: 'delivered'; slot: number }   // the sky picked its victim
+  | { kind: 'stick'; slot: number }       // bomb attached to someone
+  | { kind: 'throw'; slot: number }
+  | { kind: 'honk'; slot: number }        // tap with nothing to do
+  | { kind: 'explode'; at: Vec2 }
+  | { kind: 'launched'; slot: number; at: Vec2 } // blasted skyward
+  | { kind: 'blink'; slot: number; from: Vec2; to: Vec2 }
+  | { kind: 'dash'; slot: number }
+  | { kind: 'shieldUp'; slot: number }
+  | { kind: 'ricochet'; slot: number }           // shield bounced a landing bomb
+  | { kind: 'bounce'; slot: number; at: Vec2 }   // (legacy, unused)
+  | { kind: 'lifeLost'; slot: number; lives: number; at: Vec2 }
+  | { kind: 'pickup'; slot: number; pkind: 'heart' | 'crate'; ability?: AbilityId };
+
 export type World = {
   penguins: Penguin[];
-  floe: Floe;
+  island: Island;
   bomb: BombState;
   rules: StageRules;
   pickups: Pickup[];
@@ -81,16 +86,24 @@ export function makeWorld(
   rand: () => number = Math.random,
   rules: StageRules = DEFAULT_RULES,
 ): World {
-  const floe = makeFloe(ARENA_W / 2, ARENA_H / 2, TUNE.FLOE_RADIUS, FLOE_WOBBLE, rand, FLOE_SCALE_X);
+  const island = generateIsland(GRID_COLS, GRID_ROWS, rand);
+  // spawn spread: ground cells sorted by angle around the center, sampled evenly
+  const cx = (GRID_COLS * 64) / 2;
+  const cy = (GRID_ROWS * 64) / 2;
+  const ring = groundCells(island)
+    .map(({ c, r }) => cellCenter(island, c, r))
+    .filter((p) => Math.hypot(p.x - cx, p.y - cy) > 150)
+    .sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
   const penguins = players.map((p, i) => {
-    const angle = (i / players.length) * Math.PI * 2;
-    const r = TUNE.FLOE_RADIUS * 0.55;
+    const spot = ring.length
+      ? ring[Math.floor((i / players.length) * ring.length)]
+      : { x: cx, y: cy };
     return {
       slot: p.slot,
       name: p.name,
       color: p.color,
-      pos: { x: floe.cx + Math.cos(angle) * r * floe.sx, y: floe.cy + Math.sin(angle) * r },
-      heading: angle + Math.PI, // face inward
+      pos: { ...spot },
+      heading: Math.atan2(cy - spot.y, cx - spot.x),
       vel: { x: 0, y: 0 },
       steer: 0,
       tap: false,
@@ -104,7 +117,7 @@ export function makeWorld(
     };
   });
   return {
-    penguins, floe, bomb: idleBomb(), rules,
+    penguins, island, bomb: idleBomb(), rules,
     pickups: [], pickupTimerMs: PICKUP_INTERVAL_MS / 2, nextPickupId: 1,
     tick: 0,
   };
@@ -123,15 +136,20 @@ export function loseLife(w: World, p: Penguin, at: Vec2): WorldEvent[] {
   return events;
 }
 
-/** Somewhere safe-ish to reappear after a swim. */
+/** A random safe ground cell to reappear on. */
 export function respawnPoint(w: World, rand: () => number = Math.random): Vec2 {
-  for (let i = 0; i < 40; i++) {
-    const a = rand() * Math.PI * 2;
-    const d = rand() * TUNE.FLOE_RADIUS * 0.5;
-    const p = { x: w.floe.cx + Math.cos(a) * d * w.floe.sx, y: w.floe.cy + Math.sin(a) * d };
-    if (contains(w.floe, p) && marginAt(w.floe, p) > 60) return p;
-  }
-  return { x: w.floe.cx, y: w.floe.cy };
+  const cells = groundCells(w.island);
+  if (!cells.length) return { x: (GRID_COLS * 64) / 2, y: (GRID_ROWS * 64) / 2 };
+  const pick = cells[Math.floor(rand() * cells.length)];
+  return cellCenter(w.island, pick.c, pick.r);
+}
+
+/** Cells you cannot MOVE into: ledges always; water too when it's a wall. */
+function blockedAt(w: World, x: number, y: number): boolean {
+  const cell = cellAt(w.island, x, y);
+  if (cell === 2) return true;
+  if (cell === 0 && !w.rules.edgeDeath) return true;
+  return false;
 }
 
 export function step(w: World, dtMs: number): WorldEvent[] {
@@ -144,6 +162,7 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     if (p.isDummy) {
       const input = botInputs(w, p);
       p.steer = input.steer;
+      p.throttle = input.throttle;
       if (input.tap) p.tap = true;
     }
 
@@ -162,7 +181,7 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     } else if (p.move) {
       power = 0; // stick released: stand still
     } else {
-      // trolley-style (bots + legacy tilt schemes): always rolling
+      // bots + legacy tilt schemes: always rolling
       p.heading += p.steer * TUNE.TURN_RATE * dt;
       power = TUNE.BASE_SPEED * p.speedMult * (p.throttle ?? 1);
     }
@@ -170,16 +189,20 @@ export function step(w: World, dtMs: number): WorldEvent[] {
       x: Math.cos(p.heading) * power,
       y: Math.sin(p.heading) * power,
     };
-    // stick control gets extra grip: momentum is drift-comedy for trolleys,
-    // but it reads as "controls fighting me" under direct control
     const k = Math.min(TUNE.ICE_GRIP * (stickDriven ? TUNE.STICK_GRIP_MULT : 1) * dt, 1);
     p.vel.x += (thrust.x - p.vel.x) * k;
     p.vel.y += (thrust.y - p.vel.y) * k;
-    p.pos.x += p.vel.x * dt;
-    p.pos.y += p.vel.y * dt;
+
+    // axis-separated slide against ledges (and water-walls in practice)
+    const nx = p.pos.x + p.vel.x * dt;
+    if (blockedAt(w, nx, p.pos.y)) p.vel.x = 0;
+    else p.pos.x = nx;
+    const ny = p.pos.y + p.vel.y * dt;
+    if (blockedAt(w, p.pos.x, ny)) p.vel.y = 0;
+    else p.pos.y = ny;
   }
 
-  // Trolley-vs-trolley: positional separation + a bump impulse along the normal.
+  // gentle bump between players
   const alive = w.penguins.filter((p) => p.alive);
   for (let i = 0; i < alive.length; i++) {
     for (let j = i + 1; j < alive.length; j++) {
@@ -190,52 +213,29 @@ export function step(w: World, dtMs: number): WorldEvent[] {
       const dist = Math.hypot(dx, dy) || 0.001;
       const overlap = TUNE.PENGUIN_RADIUS * 2 - dist;
       if (overlap <= 0) continue;
-      const nx = dx / dist;
-      const ny = dy / dist;
-      a.pos.x -= nx * overlap / 2;
-      a.pos.y -= ny * overlap / 2;
-      b.pos.x += nx * overlap / 2;
-      b.pos.y += ny * overlap / 2;
-      const bump = 60;
-      a.vel.x -= nx * bump;
-      a.vel.y -= ny * bump;
-      b.vel.x += nx * bump;
-      b.vel.y += ny * bump;
+      const nx2 = dx / dist;
+      const ny2 = dy / dist;
+      a.pos.x -= nx2 * overlap / 2;
+      a.pos.y -= ny2 * overlap / 2;
+      b.pos.x += nx2 * overlap / 2;
+      b.pos.y += ny2 * overlap / 2;
+      const bump = 45;
+      a.vel.x -= nx2 * bump;
+      a.vel.y -= ny2 * bump;
+      b.vel.x += nx2 * bump;
+      b.vel.y += ny2 * bump;
     }
   }
 
-  // Rim check — falling in costs a life (bumper rim in practice).
+  // Water check — falling in costs a life.
   for (const p of w.penguins) {
     if (!p.alive) continue;
-    if (!contains(w.floe, p.pos)) {
-      if (w.rules.edgeDeath) {
-        events.push({ kind: 'splash', slot: p.slot, at: { ...p.pos } });
-        events.push(...loseLife(w, p, p.pos));
-        if (p.alive) {
-          p.pos = respawnPoint(w);
-          p.vel = { x: 0, y: 0 };
-        }
-      } else {
-        // push back inside (floe space) and reflect the outward velocity
-        const q = toFloeSpace(w.floe, p.pos);
-        const dist = Math.hypot(q.x, q.y) || 0.001;
-        const nx = q.x / dist;
-        const ny = q.y / dist;
-        const rim = radiusAt(w.floe, Math.atan2(q.y, q.x)) - 4;
-        p.pos.x = w.floe.cx + nx * rim * w.floe.sx;
-        p.pos.y = w.floe.cy + ny * rim;
-        // ellipse surface normal in world space
-        let nwx = nx / w.floe.sx;
-        let nwy = ny;
-        const nl = Math.hypot(nwx, nwy) || 0.001;
-        nwx /= nl;
-        nwy /= nl;
-        const vOut = p.vel.x * nwx + p.vel.y * nwy;
-        if (vOut > 0) {
-          p.vel.x -= vOut * 1.5 * nwx; // reflect half of it back inward
-          p.vel.y -= vOut * 1.5 * nwy;
-          if (vOut > 60) events.push({ kind: 'bounce', slot: p.slot, at: { ...p.pos } });
-        }
+    if (w.rules.edgeDeath && cellAt(w.island, p.pos.x, p.pos.y) === 0) {
+      events.push({ kind: 'splash', slot: p.slot, at: { ...p.pos } });
+      events.push(...loseLife(w, p, p.pos));
+      if (p.alive) {
+        p.pos = respawnPoint(w);
+        p.vel = { x: 0, y: 0 };
       }
     }
   }
@@ -268,11 +268,10 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     w.pickupTimerMs -= dtMs;
     if (w.pickupTimerMs <= 0 && w.pickups.length < MAX_PICKUPS) {
       w.pickupTimerMs = PICKUP_INTERVAL_MS;
-      const pos = respawnPoint(w, Math.random);
       w.pickups.push({
         id: w.nextPickupId++,
         kind: Math.random() < 0.3 ? 'heart' : 'crate',
-        pos,
+        pos: respawnPoint(w, Math.random),
         bornTick: w.tick,
       });
     }
@@ -294,3 +293,5 @@ export function step(w: World, dtMs: number): WorldEvent[] {
 
   return events;
 }
+
+export { isGround };

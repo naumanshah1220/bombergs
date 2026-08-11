@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { BOMB, bombPos, markDodge, tryThrow } from '../src/sim/bomb';
-import { contains } from '../src/sim/floe';
+import { cellAt } from '../src/sim/island';
 import { makeWorld, step, type World, type WorldEvent } from '../src/sim/world';
 
+import { ARENA_H, ARENA_W } from '../src/sim/constants';
+const CX = ARENA_W / 2;
+const CY = ARENA_H / 2;
 const rand = () => 0.5;
 
 function world(n: number): World {
@@ -10,9 +13,11 @@ function world(n: number): World {
     Array.from({ length: n }, (_, i) => ({ slot: i, name: `P${i}`, color: '#fff' })),
     rand,
   );
-  // park everyone safely apart so physics doesn't interfere with bomb tests
+  // flatten to open ground so terrain never interferes with bomb tests
+  w.island.cells.fill(1);
+  w.island.version++;
   w.penguins.forEach((p, i) => {
-    p.pos = { x: w.floe.cx + i * 200 - 200, y: w.floe.cy };
+    p.pos = { x: CX + i * 200 - 200, y: CY };
     p.heading = Math.PI / 2;
     p.vel = { x: 0, y: 0 };
     p.steer = 0;
@@ -54,8 +59,7 @@ describe('fuse', () => {
     expect(victim.alive).toBe(true); // lives system: hurt, not out
     expect(victim.lives).toBeLessThan(3);
     expect(events.some((e) => e.kind === 'launched' && e.slot === carrier)).toBe(true);
-    expect(w.floe.holes.length).toBeGreaterThanOrEqual(1);
-    if (boom && 'at' in boom) expect(contains(w.floe, boom.at)).toBe(false); // open water now
+    if (boom && 'at' in boom) expect(cellAt(w.island, boom.at.x, boom.at.y)).toBe(0); // open water now
   });
 });
 

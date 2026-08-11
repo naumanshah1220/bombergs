@@ -3,7 +3,7 @@
 // about escape and denial, mirroring Dota PTB's blink mind-games.
 
 import { carrierSlot } from './bomb';
-import { contains } from './floe';
+import { isGround } from './island';
 import type { AbilityId } from '../shared/protocol';
 import type { Penguin, World, WorldEvent } from './world';
 
@@ -16,8 +16,8 @@ export const ABILITY_COOLDOWN_MS: Record<AbilityId, number> = {
 };
 
 export const SHIELD_MS = 2000;
-export const BLINK_RANGE = 220;
-export const DASH_BOOST = 460;
+export const BLINK_RANGE = 160;
+export const DASH_BOOST = 320;
 
 export function useAbility(w: World, p: Penguin, rand: () => number = Math.random): WorldEvent[] {
   if (!p.alive || !p.ability || p.ability.cooldownMs > 0) return [];
@@ -32,7 +32,7 @@ export function useAbility(w: World, p: Penguin, rand: () => number = Math.rando
         const a = rand() * Math.PI * 2;
         const d = 90 + rand() * (BLINK_RANGE - 90);
         const to = { x: p.pos.x + Math.cos(a) * d, y: p.pos.y + Math.sin(a) * d };
-        if (contains(w.floe, to)) {
+        if (isGround(w.island, to)) {
           p.pos = to;
           p.vel = { x: 0, y: 0 };
           events.push({ kind: 'blink', slot: p.slot, from, to: { ...to } });

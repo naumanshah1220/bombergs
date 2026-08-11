@@ -7,7 +7,7 @@
 // genuinely dangerous.
 
 import { KNOCKBACK, TUNE } from './constants';
-import { addHole, type Vec2 } from './floe';
+import { destroyAt, type Vec2 } from './island';
 import { loseLife, type Penguin, type World, type WorldEvent } from './world';
 
 export const BOMB = {
@@ -16,9 +16,8 @@ export const BOMB = {
   FUSE_MIN_MS: 12000,   // Dota normal is 15s; we run slightly hotter
   FUSE_MAX_MS: 18000,
   THROW_MS: 500,        // arc flight time
-  PASS_RADIUS: 150,     // throw range (ring shown on the ice)
-  BLAST_RADIUS: 115,    // eliminates anyone this close to the boom
-  HOLE_RADIUS: 46,      // small puncture punched by a blast — fall-in-able
+  PASS_RADIUS: 105,     // throw range (ring shown on the ground)
+  BLAST_RADIUS: 82,     // costs a life this close to the boom
   NO_TAGBACK_MS: 1500,  // fresh carrier can't return to sender
 };
 
@@ -239,7 +238,7 @@ export function bombStep(w: World, dtMs: number, rand: () => number = Math.rando
 
 function explode(w: World, at: Vec2, events: WorldEvent[]): void {
   events.push({ kind: 'explode', at });
-  if (w.rules.floeBreak) addHole(w.floe, at, BOMB.HOLE_RADIUS);
+  if (w.rules.floeBreak) destroyAt(w.island, at.x, at.y);
   for (const p of w.penguins) {
     if (!p.alive || p.invulnMs > 0) continue;
     const d = Math.hypot(p.pos.x - at.x, p.pos.y - at.y);
