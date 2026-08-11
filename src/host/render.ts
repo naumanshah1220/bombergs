@@ -9,7 +9,7 @@
 // → screen-space HUD portrait cards → shake/flash.
 
 import { BOMB, fuseFrac } from '../sim/bomb';
-import { ARENA_H, ARENA_W, INVULN_MS } from '../sim/constants';
+import { ARENA_H, ARENA_W, INVULN_MS, MAX_LIVES } from '../sim/constants';
 import { TILE, cellCenter, cellIndex, groundCells, isGround, type Island } from '../sim/island';
 import type { Penguin, Vec2, World, WorldEvent } from '../sim/world';
 import { PAWN, type Assets } from './assets';
@@ -368,7 +368,7 @@ export class Renderer {
       c.fillText(p.name.slice(0, 11), x + 118, y + 29);
       // hearts under the ribbon
       if (p.alive) {
-        for (let i = 0; i < p.lives; i++) {
+        for (let i = 0; i < Math.min(p.lives, MAX_LIVES); i++) {
           this.heart(c, x + 74 + i * 18, y + 54, 7, '#e6323f');
         }
       } else {
