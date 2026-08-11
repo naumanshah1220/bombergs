@@ -100,19 +100,21 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     }
 
     let power: number;
+    const stickDriven = p.move !== undefined;
     if (p.move && Math.hypot(p.move.x, p.move.y) > 0.05) {
-      // joystick: walk where you point — heading snaps quickly toward the
-      // stick, speed scales with deflection, releasing the stick stops you
+      // joystick: walk where you point — the heading tracks the stick fast
+      // enough that a panicked full-reverse completes in about a tenth of a
+      // second, and speed scales with deflection
       const mag = Math.min(Math.hypot(p.move.x, p.move.y), 1);
       const target = Math.atan2(p.move.y, p.move.x);
       let diff = target - p.heading;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      p.heading += Math.max(-1, Math.min(1, diff)) * 12 * dt;
+      p.heading += Math.max(-1, Math.min(1, diff * 2)) * 24 * dt;
       power = TUNE.BASE_SPEED * p.speedMult * mag;
     } else if (p.move) {
       power = 0; // stick released: stand still
     } else {
-      // trolley: always rolling, tilt steers, optional gas pedal
+      // trolley-style (bots + legacy tilt schemes): always rolling
       p.heading += p.steer * TUNE.TURN_RATE * dt;
       power = TUNE.BASE_SPEED * p.speedMult * (p.throttle ?? 1);
     }
@@ -120,7 +122,9 @@ export function step(w: World, dtMs: number): WorldEvent[] {
       x: Math.cos(p.heading) * power,
       y: Math.sin(p.heading) * power,
     };
-    const k = Math.min(TUNE.ICE_GRIP * dt, 1);
+    // stick control gets extra grip: momentum is drift-comedy for trolleys,
+    // but it reads as "controls fighting me" under direct control
+    const k = Math.min(TUNE.ICE_GRIP * (stickDriven ? TUNE.STICK_GRIP_MULT : 1) * dt, 1);
     p.vel.x += (thrust.x - p.vel.x) * k;
     p.vel.y += (thrust.y - p.vel.y) * k;
     p.pos.x += p.vel.x * dt;

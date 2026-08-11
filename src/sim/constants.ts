@@ -3,12 +3,13 @@
 
 // Defaults tuned live on-device (Nauman, practice arena, Aug 10 2026).
 export const C = {
-  BASE_SPEED: 250,          // px/s walk speed at full stick deflection
+  BASE_SPEED: 225,          // px/s walk speed at full stick deflection
   CARRIER_SPEED_MULT: 1.35, // bomb carrier moves faster, no ability
   TURN_RATE: 5.5,           // rad/s (bots' trolley-style steering)
   ICE_GRIP: 5.6,            // 1/s — how fast velocity chases intent (higher = snappier)
-  PENGUIN_RADIUS: 20,       // px collision radius
-  FLOE_RADIUS: 578,         // px initial floe radius — nearly screen height
+  STICK_GRIP_MULT: 1.8,     // joystick control bites harder — panic must not mean helpless
+  PENGUIN_RADIUS: 16,       // px collision radius (smaller bird = bigger-feeling map)
+  FLOE_RADIUS: 600,         // px initial floe radius — fills the screen height
   BOT_SPEED_MULT: 1.0,      // even footing with humans
 } as const satisfies Record<string, number>;
 

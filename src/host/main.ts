@@ -108,8 +108,9 @@ function mountTunePanel(force = false): void {
     TURN_RATE: [1, 8],
     ICE_GRIP: [1, 12],
     PENGUIN_RADIUS: [10, 40],
-    FLOE_RADIUS: [200, 600],
+    FLOE_RADIUS: [200, 620],
     BOT_SPEED_MULT: [0.4, 1.2],
+    STICK_GRIP_MULT: [1, 3],
   };
   const wrap = document.createElement('div');
   wrap.id = 'tune';
