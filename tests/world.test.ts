@@ -62,7 +62,8 @@ describe('trolley physics', () => {
     const yStop = p.pos.y;
     p.move = { x: 0, y: 0 }; // release
     for (let i = 0; i < 60; i++) step(w, 1000 / 60);
-    expect(p.pos.y - yStop).toBeLessThan(30); // coasts briefly, then stands still
+    // slides ~BASE_SPEED/ICE_GRIP px while stopping on ice, then stands still
+    expect(p.pos.y - yStop).toBeLessThan(TUNE.BASE_SPEED / 4);
   });
 
   it('a bomb-free rules world never delivers a bomb', () => {

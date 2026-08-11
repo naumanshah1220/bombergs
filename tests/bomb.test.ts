@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { BOMB, bombPos, tryThrow } from '../src/sim/bomb';
-import { area } from '../src/sim/floe';
+import { BOMB, bombPos, markDodge, tryThrow } from '../src/sim/bomb';
+import { contains } from '../src/sim/floe';
 import { makeWorld, step, type World, type WorldEvent } from '../src/sim/world';
 
 const rand = () => 0.5;
@@ -43,15 +43,16 @@ describe('delivery', () => {
 });
 
 describe('fuse', () => {
-  it('explodes the carrier at fuse end and carves the floe', () => {
+  it('explodes the carrier at fuse end and punches a fall-in hole', () => {
     const w = world(3);
     tickMs(w, BOMB.IDLE_MS + BOMB.SKUA_MS + 50);
-    const before = area(w.floe);
     const carrier = w.bomb.s === 'carried' ? w.bomb.slot : -1;
     const events = tickMs(w, BOMB.FUSE_MAX_MS + 100);
-    expect(events.some((e) => e.kind === 'explode')).toBe(true);
+    const boom = events.find((e) => e.kind === 'explode');
+    expect(boom).toBeDefined();
     expect(w.penguins.find((p) => p.slot === carrier)?.alive).toBe(false);
-    expect(area(w.floe)).toBeLessThan(before);
+    expect(w.floe.holes).toHaveLength(1);
+    if (boom && 'at' in boom) expect(contains(w.floe, boom.at)).toBe(false); // open water now
   });
 });
 
@@ -64,22 +65,25 @@ describe('throwing', () => {
     return w;
   }
 
-  it('throws to a target in range; landing on them sticks', () => {
+  it('homing: sticks to the target even when they run', () => {
     const w = carriedWorld();
     w.penguins[1].pos = { x: w.penguins[0].pos.x + 100, y: w.penguins[0].pos.y };
     expect(tryThrow(w)).toBe(true);
     expect(w.bomb.s).toBe('flying');
+    // target sprints away mid-flight — doesn't matter, it homes
+    w.penguins[1].pos = { x: w.penguins[1].pos.x + 400, y: w.penguins[1].pos.y };
     const events = tickMs(w, BOMB.THROW_MS + 40);
     expect(events.some((e) => e.kind === 'stick' && e.slot === 1)).toBe(true);
   });
 
-  it('misses when the target moves — bomb lands on the ice', () => {
+  it('an ability fired mid-flight is the ONLY dodge — bomb thuds down', () => {
     const w = carriedWorld();
     w.penguins[1].pos = { x: w.penguins[0].pos.x + 100, y: w.penguins[0].pos.y };
     tryThrow(w);
-    // dodge!
-    w.penguins[1].pos = { x: w.penguins[1].pos.x + 300, y: w.penguins[1].pos.y };
-    tickMs(w, BOMB.THROW_MS + 40);
+    tickMs(w, 100);
+    expect(markDodge(w, 1)).toBe(true); // what useAbility triggers in step()
+    w.penguins[1].pos = { x: w.penguins[1].pos.x + 400, y: w.penguins[1].pos.y };
+    tickMs(w, BOMB.THROW_MS);
     expect(w.bomb.s).toBe('ground');
   });
 

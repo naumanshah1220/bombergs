@@ -56,8 +56,8 @@ describe('shield', () => {
     expect(b.shieldMs).toBe(SHIELD_MS);
     // bomb flies at the shielded penguin and "lands"
     w.bomb = {
-      s: 'flying', fromSlot: a.slot, from: { ...a.pos }, to: { ...b.pos },
-      t01: 0.99, fuseMs: 9000, fuseTotal: 15000,
+      s: 'flying', fromSlot: a.slot, toSlot: b.slot, from: { ...a.pos }, to: { ...b.pos },
+      t01: 0.99, dodged: false, fuseMs: 9000, fuseTotal: 15000,
     };
     const events = step(w, 32);
     expect(events.some((e) => e.kind === 'ricochet' && e.slot === b.slot)).toBe(true);

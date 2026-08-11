@@ -5,7 +5,7 @@
 //   4. Otherwise wander.
 
 import { BOMB, carrierSlot } from './bomb';
-import { marginAt } from './floe';
+import { contains, marginAt } from './floe';
 import type { Penguin, World } from './world';
 
 export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean } {
@@ -38,13 +38,10 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean }
 
   const abilityReady = p.ability !== undefined && p.ability.cooldownMs <= 0;
 
-  // incoming throw at me? dodge — shield/blink/dash if we have one ready
-  if (w.bomb.s === 'flying') {
-    const d = Math.hypot(w.bomb.to.x - p.pos.x, w.bomb.to.y - p.pos.y);
-    if (d < BOMB.STICK_RADIUS * 3) {
-      const away = Math.atan2(p.pos.y - w.bomb.to.y, p.pos.x - w.bomb.to.x);
-      return { steer: turnToward(p.heading, away), tap: abilityReady && w.bomb.t01 > 0.35 };
-    }
+  // bomb homing on ME? the only escape is an ability at the right moment
+  if (w.bomb.s === 'flying' && w.bomb.toSlot === p.slot && !w.bomb.dodged) {
+    const away = Math.atan2(p.pos.y - w.bomb.from.y, p.pos.x - w.bomb.from.x);
+    return { steer: turnToward(p.heading, away), tap: abilityReady && w.bomb.t01 > 0.4 };
   }
 
   // ground bomb nearby? steer clear
@@ -80,7 +77,7 @@ function edgeAvoid(w: World, p: Penguin): number | undefined {
     y: p.pos.y + Math.sin(p.heading) * lookAhead,
   };
   const margin = marginAt(w.floe, ahead);
-  if (margin >= 50) return undefined;
+  if (margin >= 50 && contains(w.floe, ahead)) return undefined; // also catches blast holes
   const toCenter = Math.atan2(w.floe.cy - p.pos.y, w.floe.cx - p.pos.x);
   return turnToward(p.heading, toCenter);
 }

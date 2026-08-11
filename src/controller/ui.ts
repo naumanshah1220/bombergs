@@ -108,14 +108,6 @@ export class ControllerUi {
     });
   }
 
-  /** Small persistent chip for flipping between auto-drive and gas-pedal. */
-  private schemeChip(scheme: DriveScheme): string {
-    return `<button id="schemebtn" style="position:absolute;top:12px;left:12px;font-size:13px;
-      padding:7px 12px;border-radius:10px;border:2px solid rgba(0,0,0,.3);
-      background:rgba(255,255,255,.35);color:#04121f;font-weight:700;z-index:5">
-      ⚙ ${SCHEME_LABEL[scheme]}</button>`;
-  }
-
   /**
    * Floating virtual joystick on the left half: the stick base appears where
    * the thumb lands, deflection = walk direction and speed.
@@ -195,13 +187,6 @@ export class ControllerUi {
     }
   }
 
-  private bindSchemeChip(): void {
-    document.getElementById('schemebtn')?.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      this.handlers.onSchemeToggle();
-    });
-  }
 
   /** Gas-pedal layout: ACTION on the left thumb, GAS on the right thumb. */
   private sideButtons(actionLabel: string): string {
@@ -247,11 +232,9 @@ export class ControllerUi {
       this.base(this.color, `
         <div style="font-size:17px;color:#04121f;opacity:.7">${name}</div>
         <div style="font-size:14px;color:#04121f;opacity:.55">${hint}</div>
-        ${this.schemeChip(scheme)}
         ${this.joystick(btnLabel)}`);
       this.wheel = undefined;
       this.flatNudge = undefined;
-      this.bindSchemeChip();
       this.bindJoystick();
       return;
     }
@@ -274,11 +257,9 @@ export class ControllerUi {
           pointer-events:none;transition:transform .08s">${btnLabel}</button>
       </div>
       <div style="font-size:14px;color:#04121f;opacity:.55">${hint}</div>
-      ${this.schemeChip(scheme)}
       ${scheme === 'gas' ? this.sideButtons(btnLabel) : ''}`);
     this.wheel = this.root.querySelector('#wheel')!;
     this.flatNudge = this.root.querySelector('#flat')!;
-    this.bindSchemeChip();
     if (scheme === 'gas') this.bindSideButtons();
     else this.bindTapAnywhere(() => this.blip(340, 0.12));
   }
@@ -319,10 +300,8 @@ export class ControllerUi {
         border:4px solid #ff5a5f;background:#2a0d10;color:#fff;font-weight:800;
         pointer-events:none;transition:transform .08s">THROW</button>` : ''}
       <div style="font-size:15px;opacity:.6">get close to someone… ${hint}</div>
-      ${this.schemeChip(scheme)}
       ${scheme === 'gas' ? this.sideButtons(throwLabel) : ''}
       ${scheme === 'stick' ? this.joystick(throwLabel) : ''}`);
-    this.bindSchemeChip();
     if (scheme === 'gas') this.bindSideButtons();
     else if (scheme === 'stick') this.bindJoystick();
     else this.bindTapAnywhere();

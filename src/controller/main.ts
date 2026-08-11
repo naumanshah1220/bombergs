@@ -21,9 +21,14 @@ let playerName = 'Penguin';
 let carrying = false;
 let lastOffer: AbilityId[] = [];
 let myAbility: AbilityId | undefined;
-let scheme: DriveScheme = (localStorage.getItem('bombergs-scheme') as DriveScheme) || 'auto';
+// Joystick won the control-scheme bake-off (Aug 10 2026). The tilt (auto/gas)
+// paths survive behind ?scheme=auto / ?scheme=gas for future experiments.
+let scheme: DriveScheme = (params.get('scheme') as DriveScheme | null) ?? 'stick';
 let gasHeld = false;
 let moveVec = { x: 0, y: 0 };
+
+/** Stick mode needs no gyro calibration — ready as soon as we're welcomed. */
+const canDrive = (): boolean => scheme === 'stick' || steerFn !== undefined;
 
 const ui = new ControllerUi(app, {
   onJoin(name) {
@@ -59,12 +64,11 @@ const ui = new ControllerUi(app, {
   },
   onSchemeToggle() {
     scheme = scheme === 'auto' ? 'gas' : scheme === 'gas' ? 'stick' : 'auto';
-    localStorage.setItem('bombergs-scheme', scheme);
     gasHeld = false;
     moveVec = { x: 0, y: 0 };
     // re-render whichever driving screen we're on
     if (carrying) ui.showBomb(scheme);
-    else if (steerFn) ui.showPlay(playerName, myAbility, scheme);
+    else if (canDrive()) ui.showPlay(playerName, myAbility, scheme);
   },
   onDraftPick(index) {
     myAbility = lastOffer[index];
@@ -93,19 +97,20 @@ function handleHostMessage(msg: H2C): void {
     case 'welcome':
       ui.color = msg.color;
       sessionStorage.setItem('bombergs-token', msg.slotToken);
-      ui.showCalibrate(simMode);
+      if (scheme === 'stick') ui.showPlay(playerName, myAbility, scheme);
+      else ui.showCalibrate(simMode);
       break;
     case 'phase':
       if (msg.phase === 'calibrate') ui.showCalibrate(simMode);
-      // New stage: anyone calibrated returns to the wheel (revives the dead)
-      if (msg.phase === 'play' && steerFn) { carrying = false; ui.stopFuse(); ui.showPlay(playerName, myAbility, scheme); }
-      if (msg.phase === 'play' && !steerFn) ui.showCalibrate(simMode);
+      // New stage: everyone returns to the sticks (revives the dead)
+      if (msg.phase === 'play' && canDrive()) { carrying = false; ui.stopFuse(); ui.showPlay(playerName, myAbility, scheme); }
+      if (msg.phase === 'play' && !canDrive()) ui.showCalibrate(simMode);
       if (msg.phase === 'gameover') ui.showWaiting('Match over! Check the big screen 🏆');
       if (msg.phase === 'lobby') ui.showWaiting('Back in the lobby — next match soon!');
       break;
     case 'bomb':
       if (msg.carrying && !carrying) ui.showBomb(scheme);
-      if (!msg.carrying && carrying) { ui.stopFuse(); ui.showPlay(playerName, myAbility, scheme); }
+      if (!msg.carrying && carrying && canDrive()) { ui.stopFuse(); ui.showPlay(playerName, myAbility, scheme); }
       carrying = msg.carrying;
       if (carrying) ui.setFuse(msg.fuseFrac);
       break;

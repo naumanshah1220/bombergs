@@ -1,12 +1,11 @@
 ﻿// Arena renderer: everything procedural on Canvas 2D. Press P to toggle retro
-// mode â€” the same scene rendered at low resolution and upscaled with
+// mode — the same scene rendered at low resolution and upscaled with
 // smoothing off, i.e. free pixel art.
 //
-// Scene layers, back to front: night sky (stars, moon) â†’ aurora curtains â†’
-// distant icebergs + the Arctic Mart neon â†’ water (waves, aurora shimmer) â†’
-// floe (submerged rim, foam ring, surface, speckle texture) â†’ splashes and
-// bobbing ice cubes â†’ penguins (shadow, trolley, bird, scarf) with snow spray
-// and motion trails â†’ vignette.
+// Scene layers, back to front: open water (aurora washes, waves, glints) →
+// floe (rim, foam, surface, speckles, blast holes) → splashes and bobbing
+// ice cubes → walking penguins (feet, scarf, snow spray, motion trails) →
+// bomb layer → vignette.
 
 import { BOMB, fuseFrac } from '../sim/bomb';
 import { ARENA_H, ARENA_W, TUNE } from '../sim/constants';
@@ -221,13 +220,13 @@ export class Renderer {
       const x = b.from.x + (b.to.x - b.from.x) * b.t01;
       const y = b.from.y + (b.to.y - b.from.y) * b.t01;
       const h = Math.sin(Math.PI * Math.min(b.t01, 1)) * 130;
-      // landing reticle â€” the dodge telegraph
+      // landing reticle — tightens as the homing bomb closes in
       c.save();
       c.setLineDash([8, 8]);
       c.lineWidth = 4;
-      c.strokeStyle = 'rgba(255, 90, 95, .85)';
+      c.strokeStyle = b.dodged ? 'rgba(180, 200, 220, .7)' : 'rgba(255, 90, 95, .85)';
       c.beginPath();
-      c.arc(b.to.x, b.to.y, BOMB.STICK_RADIUS * (1.4 - 0.4 * b.t01), 0, Math.PI * 2);
+      c.arc(b.to.x, b.to.y, 48 * (1.4 - 0.4 * b.t01), 0, Math.PI * 2);
       c.stroke();
       c.restore();
       // shadow shrinks with height
@@ -443,6 +442,40 @@ export class Renderer {
       c.arc(f.cx + Math.cos(s.a) * rr * f.sx, f.cy + Math.sin(s.a) * rr, s.r, 0, Math.PI * 2);
       c.fill();
     }
+    // blast holes: open water punched through the ice
+    for (const h of f.holes) {
+      const wg = c.createRadialGradient(h.x, h.y, h.r * 0.2, h.x, h.y, h.r);
+      wg.addColorStop(0, '#0a3a4d');
+      wg.addColorStop(0.8, '#0e4a5f');
+      wg.addColorStop(1, '#1a6579');
+      c.fillStyle = wg;
+      c.beginPath();
+      c.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+      c.fill();
+      // jagged icy lip
+      c.strokeStyle = 'rgba(220, 240, 252, .8)';
+      c.lineWidth = 3;
+      c.beginPath();
+      for (let k = 0; k <= 14; k++) {
+        const a = (k / 14) * Math.PI * 2;
+        const rr = h.r * (1 + ((k * 7) % 3) * 0.045);
+        const px = h.x + Math.cos(a) * rr;
+        const py = h.y + Math.sin(a) * rr;
+        k === 0 ? c.moveTo(px, py) : c.lineTo(px, py);
+      }
+      c.closePath();
+      c.stroke();
+      // shimmering water inside
+      c.globalAlpha = 0.25 + Math.sin(this.t * 2 + h.x) * 0.08;
+      c.strokeStyle = '#7dd6ff';
+      c.lineWidth = 1.5;
+      c.beginPath();
+      c.moveTo(h.x - h.r * 0.5, h.y + Math.sin(this.t * 1.3) * 4);
+      c.lineTo(h.x + h.r * 0.5, h.y + Math.sin(this.t * 1.3 + 1) * 4);
+      c.stroke();
+      c.globalAlpha = 1;
+    }
+
     c.strokeStyle = 'rgba(160, 200, 225, .3)';
     c.lineWidth = 2;
     for (let v = 0; v < 5; v++) {
@@ -484,7 +517,7 @@ export class Renderer {
     this.splashes = this.splashes.filter((s) => s.age < 1.1);
   }
 
-  /** Eliminated penguins bob past frozen in an ice cube â€” the spec's promise. */
+  /** Eliminated penguins bob past frozen in an ice cube — the spec's promise. */
   private updateCubes(c: CanvasRenderingContext2D): void {
     for (const cube of this.cubes) {
       const age = this.t - cube.born;
@@ -574,33 +607,20 @@ export class Renderer {
     c.save();
     c.translate(x, y);
     c.beginPath();
-    c.ellipse(0, R * 0.85, R * 1.35, R * 0.5, 0, 0, Math.PI * 2);
+    c.ellipse(0, R * 0.7, R * 1.15, R * 0.45, 0, 0, Math.PI * 2);
     c.fillStyle = 'rgba(40, 70, 100, .3)';
     c.fill();
     c.rotate(p.heading + waddle);
 
-    // trolley: basket with mesh lines + four wheels + handlebar
-    c.fillStyle = '#b8cad9';
-    c.strokeStyle = '#8298ac';
-    c.lineWidth = 2.5;
-    c.fillRect(-R * 1.25, -R * 0.95, R * 2.5, R * 1.9);
-    c.strokeRect(-R * 1.25, -R * 0.95, R * 2.5, R * 1.9);
-    c.strokeStyle = 'rgba(130, 152, 172, .5)';
-    c.lineWidth = 1.4;
-    for (let i = -2; i <= 2; i++) {
+    // little orange feet peeking out, alternating steps while walking
+    const stepPhase = Math.sin(this.t * 13 + p.slot * 2);
+    const stride = speed > 25 ? stepPhase * R * 0.5 : 0;
+    c.fillStyle = '#ff9d3d';
+    for (const side of [-1, 1]) {
       c.beginPath();
-      c.moveTo(i * R * 0.45, -R * 0.95);
-      c.lineTo(i * R * 0.45, R * 0.95);
-      c.stroke();
-    }
-    c.fillStyle = '#31404f';
-    for (const [wx, wy] of [[-R * 1.05, -R * 1.05], [-R * 1.05, R * 1.05], [R * 1.05, -R * 1.05], [R * 1.05, R * 1.05]] as const) {
-      c.beginPath();
-      c.arc(wx, wy, R * 0.26, 0, Math.PI * 2);
+      c.ellipse(-R * 0.25 + side * stride, side * R * 0.6, R * 0.38, R * 0.22, 0, 0, Math.PI * 2);
       c.fill();
     }
-    c.fillStyle = '#d5e2ec';
-    c.fillRect(-R * 1.6, -R * 0.95, R * 0.32, R * 1.9);
 
     // bird: body, belly, head, eyes, beak, flippers
     c.beginPath();

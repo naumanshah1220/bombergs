@@ -7,7 +7,7 @@
 // genuinely dangerous.
 
 import { TUNE } from './constants';
-import { breakChunk, type Vec2 } from './floe';
+import { addHole, type Vec2 } from './floe';
 import type { Penguin, World, WorldEvent } from './world';
 
 export const BOMB = {
@@ -17,8 +17,8 @@ export const BOMB = {
   FUSE_MAX_MS: 18000,
   THROW_MS: 500,        // arc flight time
   PASS_RADIUS: 150,     // throw range (ring shown on the ice)
-  STICK_RADIUS: 34,     // landing catch radius
   BLAST_RADIUS: 115,    // eliminates anyone this close to the boom
+  HOLE_RADIUS: 46,      // small puncture punched by a blast — fall-in-able
   NO_TAGBACK_MS: 1500,  // fresh carrier can't return to sender
 };
 
@@ -26,7 +26,8 @@ export type BombState =
   | { s: 'idle'; t: number }
   | { s: 'delivering'; toSlot: number; t: number }
   | { s: 'carried'; slot: number; fuseMs: number; fuseTotal: number; prevSlot: number; noTagBackMs: number }
-  | { s: 'flying'; fromSlot: number; from: Vec2; to: Vec2; t01: number; fuseMs: number; fuseTotal: number }
+  // homing: `to` tracks the target until they DODGE (ability mid-flight)
+  | { s: 'flying'; fromSlot: number; toSlot: number; from: Vec2; to: Vec2; t01: number; dodged: boolean; fuseMs: number; fuseTotal: number }
   | { s: 'ground'; pos: Vec2; fuseMs: number; fuseTotal: number };
 
 export const idleBomb = (): BombState => ({ s: 'idle', t: 0 });
@@ -72,13 +73,28 @@ export function tryThrow(w: World): boolean {
   w.bomb = {
     s: 'flying',
     fromSlot: b.slot,
+    toSlot: target.slot,
     from: { ...me.pos },
     to: { ...target.pos },
     t01: 0,
+    dodged: false,
     fuseMs: b.fuseMs,
     fuseTotal: b.fuseTotal,
   };
   return true;
+}
+
+/**
+ * Called when a penguin fires an ability while a bomb is homing on them:
+ * the ONE way to make a throw miss. The bomb stops tracking and falls where
+ * they just were.
+ */
+export function markDodge(w: World, slot: number): boolean {
+  if (w.bomb.s === 'flying' && w.bomb.toSlot === slot && !w.bomb.dodged) {
+    w.bomb.dodged = true;
+    return true;
+  }
+  return false;
 }
 
 function nearestTarget(w: World, me: Penguin, excludeSlot: number | undefined, range: number, skipShielded = false): Penguin | undefined {
@@ -157,38 +173,39 @@ export function bombStep(w: World, dtMs: number, rand: () => number = Math.rando
     case 'flying': {
       b.fuseMs -= dtMs;
       b.t01 += dtMs / BOMB.THROW_MS;
+      const target = w.penguins.find((p) => p.slot === b.toSlot);
+      if (!b.dodged) {
+        if (target?.alive) b.to = { ...target.pos }; // homing: it WILL find you
+        else b.dodged = true;                        // target gone; falls where they were
+      }
       if (b.fuseMs <= 0) {
         const at = bombPos(w);
         if (at) explode(w, at, events);
         break;
       }
       if (b.t01 >= 1) {
-        // must LAND to stick: whoever is under it now — dodgeable, and the
-        // thrower can absolutely be caught by their own bomb
-        const catcher = alive
-          .map((p) => ({ p, d: Math.hypot(p.pos.x - b.to.x, p.pos.y - b.to.y) }))
-          .filter(({ d }) => d < BOMB.STICK_RADIUS)
-          .sort((a, z) => a.d - z.d)[0]?.p;
-        if (catcher && catcher.shieldMs > 0) {
-          // Ice Shield: the bomb ricochets to the nearest other penguin
-          const next = nearestTarget(w, catcher, undefined, Infinity, true);
-          events.push({ kind: 'ricochet', slot: catcher.slot });
+        if (!b.dodged && target?.alive && target.shieldMs > 0) {
+          // Ice Shield: the bomb ricochets onward to the nearest other penguin
+          const next = nearestTarget(w, target, undefined, Infinity, true);
+          events.push({ kind: 'ricochet', slot: target.slot });
           if (next) {
             w.bomb = {
-              s: 'flying', fromSlot: catcher.slot,
-              from: { ...catcher.pos }, to: { ...next.pos },
-              t01: 0, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal,
+              s: 'flying', fromSlot: target.slot, toSlot: next.slot,
+              from: { ...target.pos }, to: { ...next.pos },
+              t01: 0, dodged: false, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal,
             };
           } else {
             w.bomb = { s: 'ground', pos: { ...b.to }, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal };
           }
-        } else if (catcher) {
+        } else if (!b.dodged && target?.alive) {
+          // guaranteed stick — dodging mid-flight was the only out
           w.bomb = {
-            s: 'carried', slot: catcher.slot, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal,
+            s: 'carried', slot: target.slot, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal,
             prevSlot: b.fromSlot, noTagBackMs: BOMB.NO_TAGBACK_MS,
           };
-          events.push({ kind: 'stick', slot: catcher.slot });
+          events.push({ kind: 'stick', slot: target.slot });
         } else {
+          // dodged: thuds onto the ice where the target used to be
           w.bomb = { s: 'ground', pos: { ...b.to }, fuseMs: b.fuseMs, fuseTotal: b.fuseTotal };
         }
       }
@@ -222,7 +239,7 @@ export function bombStep(w: World, dtMs: number, rand: () => number = Math.rando
 
 function explode(w: World, at: Vec2, events: WorldEvent[]): void {
   events.push({ kind: 'explode', at });
-  if (w.rules.floeBreak) breakChunk(w.floe, at, BOMB.BLAST_RADIUS * 0.9);
+  if (w.rules.floeBreak) addHole(w.floe, at, BOMB.HOLE_RADIUS);
   for (const p of w.penguins) {
     if (!p.alive) continue;
     if (Math.hypot(p.pos.x - at.x, p.pos.y - at.y) <= BOMB.BLAST_RADIUS) {

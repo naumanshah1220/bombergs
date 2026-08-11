@@ -2,7 +2,7 @@
 // rendering. The host calls step() at 60Hz and forwards the returned events.
 
 import { abilityTick, useAbility } from './abilities';
-import { bombStep, carrierSlot, idleBomb, type BombState } from './bomb';
+import { bombStep, carrierSlot, idleBomb, markDodge, type BombState } from './bomb';
 import { botInputs } from './bots';
 import { ARENA_H, ARENA_W, FLOE_SCALE_X, FLOE_WOBBLE, TUNE } from './constants';
 import { contains, makeFloe, radiusAt, toFloeSpace, type Floe, type Vec2 } from './floe';
@@ -193,7 +193,11 @@ export function step(w: World, dtMs: number): WorldEvent[] {
   for (const p of w.penguins) {
     if (p.tap && p.alive && p.slot !== carrier && p.ability) {
       const used = useAbility(w, p);
-      if (used.length) { events.push(...used); p.tap = false; }
+      if (used.length) {
+        events.push(...used);
+        p.tap = false;
+        markDodge(w, p.slot); // ability while a bomb homes on you = the dodge
+      }
     }
   }
 

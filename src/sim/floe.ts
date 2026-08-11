@@ -11,11 +11,14 @@ import { FLOE_MIN_AREA_FRAC, FLOE_SPOKES } from './constants';
 
 export type Vec2 = { x: number; y: number };
 
+export type Hole = { x: number; y: number; r: number }; // world coords
+
 export type Floe = {
   cx: number;
   cy: number;
   sx: number;             // horizontal stretch (1 = circle)
   radii: number[];        // length FLOE_SPOKES, radius per spoke angle (floe space)
+  holes: Hole[];          // blast punctures — open water inside the ice
   initialArea: number;
 };
 
@@ -29,9 +32,18 @@ export function makeFloe(
   for (let i = 0; i < FLOE_SPOKES; i++) {
     radii.push(radius * (1 - wobble / 2 + rand() * wobble));
   }
-  const floe: Floe = { cx, cy, sx, radii, initialArea: 0 };
+  const floe: Floe = { cx, cy, sx, radii, holes: [], initialArea: 0 };
   floe.initialArea = area(floe);
   return floe;
+}
+
+/** Punch a small blast hole — open water you can fall into. */
+export function addHole(f: Floe, at: Vec2, r: number): void {
+  f.holes.push({ x: at.x, y: at.y, r });
+}
+
+export function inHole(f: Floe, p: Vec2): boolean {
+  return f.holes.some((h) => Math.hypot(p.x - h.x, p.y - h.y) < h.r);
 }
 
 /** World point → floe space (undoes the horizontal stretch). */
@@ -64,6 +76,7 @@ export function radiusAt(f: Floe, angle: number): number {
 }
 
 export function contains(f: Floe, p: Vec2): boolean {
+  if (inHole(f, p)) return false;
   const q = toFloeSpace(f, p);
   return Math.hypot(q.x, q.y) <= radiusAt(f, Math.atan2(q.y, q.x));
 }
