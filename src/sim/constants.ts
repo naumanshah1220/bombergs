@@ -7,7 +7,7 @@ export const C = {
   CARRIER_SPEED_MULT: 1.35, // bomb carrier moves faster, no ability
   TURN_RATE: 5.5,           // rad/s (bots' trolley-style steering)
   ICE_GRIP: 5.6,            // 1/s — how fast velocity chases intent (higher = snappier)
-  STICK_GRIP_MULT: 1.8,     // joystick control bites harder — panic must not mean helpless
+  STICK_GRIP_MULT: 2.4,     // joystick control bites harder — panic must not mean helpless
   PENGUIN_RADIUS: 16,       // px collision radius (smaller bird = bigger-feeling map)
   FLOE_RADIUS: 600,         // px initial floe radius — fills the screen height
   BOT_SPEED_MULT: 1.0,      // even footing with humans

@@ -109,27 +109,33 @@ export class ControllerUi {
   }
 
   /**
-   * Floating virtual joystick on the left half: the stick base appears where
-   * the thumb lands, deflection = walk direction and speed.
+   * Blind-friendly split layout: the ENTIRE left half is the floating
+   * joystick (base appears wherever the thumb lands), the ENTIRE right half
+   * is the action button. No aiming at circles while your eyes are on the TV.
    */
   private joystick(actionLabel: string): string {
     return `
-      <div id="stickzone" style="position:absolute;left:0;top:0;bottom:0;width:55%;touch-action:none">
-        <div id="stickbase" style="position:absolute;width:140px;height:140px;border-radius:50%;
+      <div id="stickzone" style="position:absolute;left:0;top:0;bottom:0;width:50%;touch-action:none">
+        <div id="stickbase" style="position:absolute;width:150px;height:150px;border-radius:50%;
           border:4px solid rgba(0,0,0,.35);background:rgba(255,255,255,.18);display:none;
           transform:translate(-50%,-50%);pointer-events:none">
-          <div id="stickknob" style="position:absolute;left:50%;top:50%;width:64px;height:64px;
+          <div id="stickknob" style="position:absolute;left:50%;top:50%;width:70px;height:70px;
             border-radius:50%;background:rgba(255,255,255,.85);border:4px solid rgba(0,0,0,.3);
             transform:translate(-50%,-50%)"></div>
         </div>
         <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
           font-size:14px;color:rgba(4,18,31,.5);font-weight:700;pointer-events:none">
-          ⊕ left thumb here</div>
+          ⊕ anywhere here = walk</div>
       </div>
-      <button id="sideact" style="position:absolute;right:4vw;top:50%;transform:translateY(-50%);
-        width:29vmin;height:29vmin;border-radius:50%;font-size:19px;font-weight:800;
-        border:6px solid rgba(0,0,0,.3);background:rgba(255,255,255,.85);color:#04121f;
-        touch-action:none;transition:filter .06s">${actionLabel}</button>`;
+      <div id="actzone" style="position:absolute;right:0;top:0;bottom:0;width:50%;
+        touch-action:none;background:rgba(255,255,255,.06);border-left:2px dashed rgba(0,0,0,.15);
+        transition:background .06s">
+        <div id="actface" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+          width:32vmin;height:32vmin;border-radius:50%;border:6px solid rgba(0,0,0,.25);
+          background:rgba(255,255,255,.8);color:#04121f;font-weight:800;font-size:20px;
+          display:flex;align-items:center;justify-content:center;flex-direction:column;
+          pointer-events:none;transition:transform .06s">${actionLabel}</div>
+      </div>`;
   }
 
   private bindJoystick(): void {
@@ -137,7 +143,7 @@ export class ControllerUi {
     const base = document.getElementById('stickbase');
     const knob = document.getElementById('stickknob');
     if (!zone || !base || !knob) return;
-    const RADIUS = 62;
+    const RADIUS = 52; // smaller throw = faster to hit full deflection
     let originX = 0;
     let originY = 0;
     let activeId: number | undefined;
@@ -171,13 +177,15 @@ export class ControllerUi {
     };
     zone.addEventListener('pointerup', release);
     zone.addEventListener('pointercancel', release);
-    // right-side action button
-    const act = document.getElementById('sideact');
+    // the whole right half is the action button
+    const act = document.getElementById('actzone');
+    const face = document.getElementById('actface');
     if (act) {
       const press = (down: boolean) => (e: Event) => {
         e.preventDefault();
         e.stopPropagation();
-        act.style.filter = down ? 'brightness(.8)' : '';
+        act.style.background = down ? 'rgba(255,255,255,.22)' : 'rgba(255,255,255,.06)';
+        if (face) face.style.transform = `translate(-50%,-50%) scale(${down ? 0.92 : 1})`;
         if (down) this.blip(340, 0.1);
         this.handlers.onAction(down);
       };

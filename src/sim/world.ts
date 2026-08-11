@@ -109,7 +109,7 @@ export function step(w: World, dtMs: number): WorldEvent[] {
       const target = Math.atan2(p.move.y, p.move.x);
       let diff = target - p.heading;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      p.heading += Math.max(-1, Math.min(1, diff * 2)) * 24 * dt;
+      p.heading += Math.max(-1, Math.min(1, diff * 2)) * 30 * dt;
       power = TUNE.BASE_SPEED * p.speedMult * mag;
     } else if (p.move) {
       power = 0; // stick released: stand still
