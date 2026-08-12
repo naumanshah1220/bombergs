@@ -119,12 +119,13 @@ export function generateIsland(cols: number, rows: number, rand: () => number = 
       const leftIdx = cellIndex(i, pc, sr);
       const rightIdx = cellIndex(i, pc + pw - 1, sr);
       if (rand() < 0.5 && cells[leftIdx] === 2 && cells[cellIndex(i, pc - 1, sr)] === 1) {
-        i.stairs.add(leftIdx); // faces left, no flip
+        i.stairs.add(leftIdx);
+        i.stairsFlip.add(leftIdx); // mirrored to face the ground on its left
       } else if (cells[rightIdx] === 2 && cells[cellIndex(i, pc + pw, sr)] === 1) {
-        i.stairs.add(rightIdx);
-        i.stairsFlip.add(rightIdx); // mirrored, faces right
+        i.stairs.add(rightIdx); // sprite's natural facing suits the right edge
       } else if (cells[leftIdx] === 2 && cells[cellIndex(i, pc - 1, sr)] === 1) {
         i.stairs.add(leftIdx);
+        i.stairsFlip.add(leftIdx);
       }
     }
   }
@@ -178,19 +179,17 @@ export function nearestStair(i: Island, p: Vec2): Vec2 | undefined {
   return best;
 }
 
-/** Blast damage: plateau flattens, ground opens to water; stairs drop too. */
+/**
+ * Blast damage: only LOW ground opens to water. Plateaus are indestructible
+ * (a crater ringed by cliffs would be an inescapable pit) and stairs are
+ * indestructible (destroying the only way down strands people — and farming
+ * that would be too strong a strategy).
+ */
 export function destroyAt(i: Island, wx: number, wy: number): void {
   const { c, r } = cellOf(wx, wy);
   if (c < 0 || r < 0 || c >= i.cols || r >= i.rows) return;
   const idx = cellIndex(i, c, r);
-  if (i.cells[idx] === 2) {
-    i.cells[idx] = 1;
-    i.stairs.delete(idx);
-    i.stairsFlip.delete(idx);
-  } else if (i.cells[idx] === 1) {
-    i.cells[idx] = 0;
-    i.stairs.delete(idx);
-    i.stairsFlip.delete(idx);
-  } else return;
+  if (i.cells[idx] !== 1 || i.stairs.has(idx)) return;
+  i.cells[idx] = 0;
   i.version++;
 }
