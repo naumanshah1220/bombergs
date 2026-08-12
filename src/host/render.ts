@@ -8,7 +8,7 @@
 
 import { BOMB, fuseFrac } from '../sim/bomb';
 import { ARENA_H, ARENA_W, INVULN_MS, MAX_LIVES } from '../sim/constants';
-import { TILE, cellCenter, cellIndex, groundCells, isGround, type Island } from '../sim/island';
+import { TILE, cellAt, cellCenter, cellIndex, groundCells, isGround, type Island } from '../sim/island';
 import type { Penguin, Vec2, World, WorldEvent } from '../sim/world';
 import { DECO_META, PAWN, type Assets } from './assets';
 
@@ -203,7 +203,7 @@ export class Renderer {
       const ic = canvas.getContext('2d')!;
       ic.imageSmoothingEnabled = false;
       ic.clearRect(0, 0, ARENA_W, ARENA_H);
-      const RAISE = 20;
+      const RAISE = 64; // full-tile cliffs, the way the tileset is drawn
       const sheetFor = (idx: number) =>
         (this.a.img as Record<string, HTMLImageElement>)['tilemap' + (i.skins[idx] ?? 1)] ?? this.a.img.tilemap1;
       for (let r = 0; r < i.rows; r++) {
@@ -223,7 +223,7 @@ export class Renderer {
             const wl = this.land(i, col - 1, r, 2) && !this.land(i, col - 1, r + 1, 2);
             const wr = this.land(i, col + 1, r, 2) && !this.land(i, col + 1, r + 1, 2);
             const wx = wl && wr ? 6 : wr ? 5 : wl ? 7 : 8;
-            ic.drawImage(sheet, wx * 64, 4 * 64, 64, 64, col * TILE, r * TILE + TILE - RAISE - 20, TILE, TILE);
+            ic.drawImage(sheet, wx * 64, 4 * 64, 64, 64, col * TILE, r * TILE, TILE, TILE);
             // soft automatic shadow at the cliff base (one long strip, no tiling seams)
             ic.fillStyle = 'rgba(20, 30, 20, .18)';
             ic.fillRect(col * TILE - 2, r * TILE + TILE + 4, TILE + 4, 14);
@@ -240,7 +240,7 @@ export class Renderer {
         ic.save();
         ic.translate(scol * TILE + TILE / 2, 0);
         if (i.stairsFlip.has(sidx)) ic.scale(-1, 1);
-        ic.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, srow * TILE - TILE, TILE, TILE * 2);
+        ic.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, srow * TILE - TILE - 20, TILE, TILE * 2);
         ic.restore();
       }
       this.islandCache = { canvas, version: i.version };
@@ -283,9 +283,19 @@ export class Renderer {
     const actors: Actor[] = [];
     const carrier = w.bomb.s === 'carried' ? w.bomb.slot : undefined;
 
+    const liftAt = (x: number, y: number) => (cellAt(w.island, x, y) === 2 ? TILE : 0);
     for (const p of w.penguins) {
       if (!p.alive) continue;
-      actors.push({ y: p.pos.y, drawFn: () => this.pawn(c, p, p.slot === carrier) });
+      const lift = liftAt(p.pos.x, p.pos.y);
+      actors.push({
+        y: p.pos.y,
+        drawFn: () => {
+          c.save();
+          c.translate(0, -lift);
+          this.pawn(c, p, p.slot === carrier);
+          c.restore();
+        },
+      });
     }
     for (const pk of w.pickups) {
       const bob = Math.sin(this.t * 3 + pk.id) * 3;
@@ -293,7 +303,7 @@ export class Renderer {
         y: pk.pos.y,
         drawFn: () => {
           c.save();
-          c.translate(pk.pos.x, pk.pos.y + bob);
+          c.translate(pk.pos.x, pk.pos.y + bob - liftAt(pk.pos.x, pk.pos.y));
           if (pk.kind === 'heart') this.heart(c, 0, 0, 12, '#ff4560');
           else this.crate(c);
           c.restore();
@@ -582,7 +592,7 @@ export class Renderer {
       const me = w.penguins.find((p) => p.slot === b.slot);
       if (!me) return;
       c.save();
-      c.translate(me.pos.x, me.pos.y);
+      c.translate(me.pos.x, me.pos.y - (cellAt(w.island, me.pos.x, me.pos.y) === 2 ? TILE : 0));
       c.rotate(this.t * 0.7);
       c.setLineDash([20, 14]);
       c.lineWidth = 4;

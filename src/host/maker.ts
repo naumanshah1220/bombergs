@@ -228,7 +228,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
         const U = same(c, r - 1, 2, sk); const D = same(c, r + 1, 2, sk);
         if (!land(c, r + 1, 2)) {
           const wx = L && R ? 6 : R ? 5 : L ? 7 : 8;
-          ctx.drawImage(sheetFor(idx), wx * 64, 4 * 64, 64, 64, c * TILE, r * TILE + TILE - 40, TILE, TILE);
+          ctx.drawImage(sheetFor(idx), wx * 64, 4 * 64, 64, 64, c * TILE, r * TILE, TILE, TILE);
           ctx.fillStyle = 'rgba(20, 30, 20, .18)';
           ctx.fillRect(c * TILE - 2, r * TILE + TILE + 4, TILE + 4, 14);
           ctx.fillStyle = 'rgba(20, 30, 20, .10)';
@@ -236,7 +236,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
         }
         const sx = 320 + (L && R ? 1 : R ? 0 : L ? 2 : 3) * 64;
         const sy = (U && D ? 1 : D ? 0 : U ? 2 : 3) * 64;
-        ctx.drawImage(sheetFor(idx), sx, sy, 64, 64, c * TILE, r * TILE - 20, TILE, TILE);
+        ctx.drawImage(sheetFor(idx), sx, sy, 64, 64, c * TILE, r * TILE - 64, TILE, TILE);
       }
     }
     for (const sidx of stairs) {
@@ -245,7 +245,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
       ctx.save();
       ctx.translate(sc2 * TILE + TILE / 2, 0);
       if (stairsFlip.has(sidx)) ctx.scale(-1, 1);
-      ctx.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, sr2 * TILE - TILE, TILE, TILE * 2);
+      ctx.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, sr2 * TILE - TILE - 20, TILE, TILE * 2);
       ctx.restore();
     }
     drawDeco(false);
