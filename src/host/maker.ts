@@ -22,6 +22,7 @@ type Tool = 'water' | 'ground' | 'plateau' | 'stair' | string; // deco names too
 export function startMaker(app: HTMLElement, assets: Assets): void {
   let cells: Cell[] = new Array(GRID_COLS * GRID_ROWS).fill(0) as Cell[];
   let stairs = new Set<number>();
+  let stairsFlip = new Set<number>();
   let skins: number[] = new Array(GRID_COLS * GRID_ROWS).fill(1);
   let deco: DecoItem[] = [];
   let tool: Tool = 'ground';
@@ -60,7 +61,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     </div>`;
 
   const toolsDiv = document.getElementById('tools')!;
-  const terrainTools: [Tool, string][] = [['water', '🌊 water'], ['ground', '🟩 ground'], ['plateau', '⬛ plateau'], ['stair', '🪜 stairs']];
+  const terrainTools: [Tool, string][] = [['water', '🌊 water'], ['ground', '🟩 ground'], ['plateau', '⬛ plateau'], ['stair', '🪜 stairs ◀'], ['stairflip', '🪜 stairs ▶']];
   for (const [id, label] of [...terrainTools, ...DECO_LIB.map((d) => [d, `🌳 ${d}`] as [Tool, string])]) {
     const b = document.createElement('button');
     b.textContent = label;
@@ -92,10 +93,11 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     const r = Math.floor(y / TILE);
     if (c < 0 || r < 0 || c >= GRID_COLS || r >= GRID_ROWS) return;
     const idx = r * GRID_COLS + c;
-    if (tool === 'water') { cells[idx] = 0; stairs.delete(idx); }
+    if (tool === 'water') { cells[idx] = 0; stairs.delete(idx); stairsFlip.delete(idx); }
     else if (tool === 'ground') { cells[idx] = 1; skins[idx] = skin; stairs.delete(idx); }
     else if (tool === 'plateau') { cells[idx] = 2; skins[idx] = skin; stairs.delete(idx); }
-    else if (tool === 'stair') { cells[idx] = 1; skins[idx] = skin; stairs.add(idx); }
+    else if (tool === 'stair') { cells[idx] = 1; skins[idx] = skin; stairs.add(idx); stairsFlip.delete(idx); }
+    else if (tool === 'stairflip') { cells[idx] = 1; skins[idx] = skin; stairs.add(idx); stairsFlip.add(idx); }
   }
 
   canvas.addEventListener('mousedown', (e) => {
@@ -131,6 +133,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     cells = new Array(GRID_COLS * GRID_ROWS).fill(0) as Cell[];
     skins = new Array(GRID_COLS * GRID_ROWS).fill(1);
     stairs = new Set();
+    stairsFlip = new Set();
     deco = [];
     selected = -1;
   });
@@ -147,7 +150,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     const name = nameInput.value.trim();
     if (!name) { alert('name the level first'); return; }
     const levels = loadLevels();
-    levels[name] = { name, skin, skins: [...skins], cols: GRID_COLS, rows: GRID_ROWS, cells: [...cells], stairs: [...stairs], deco: [...deco] };
+    levels[name] = { name, skin, skins: [...skins], cols: GRID_COLS, rows: GRID_ROWS, cells: [...cells], stairs: [...stairs], stairsFlip: [...stairsFlip], deco: [...deco] };
     saveLevels(levels);
     refreshLoad();
     alert(`saved "${name}" — it's now in the lobby's level picker`);
@@ -157,6 +160,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     if (!lv) return;
     cells = [...lv.cells] as Cell[];
     stairs = new Set(lv.stairs);
+    stairsFlip = new Set(lv.stairsFlip ?? []);
     skin = lv.skin ?? 1;
     skins = lv.skins ? [...lv.skins] : new Array(GRID_COLS * GRID_ROWS).fill(skin);
     (document.getElementById('mskin') as HTMLSelectElement).value = String(skin);
@@ -166,7 +170,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
   });
   document.getElementById('mexport')!.addEventListener('click', () => {
     const name = nameInput.value.trim() || 'level';
-    const blob = new Blob([JSON.stringify({ name, skin, skins, cols: GRID_COLS, rows: GRID_ROWS, cells, stairs: [...stairs], deco }, null, 1)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ name, skin, skins, cols: GRID_COLS, rows: GRID_ROWS, cells, stairs: [...stairs], stairsFlip: [...stairsFlip], deco }, null, 1)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${name}.json`;
@@ -194,6 +198,16 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
       (assets.img as Record<string, HTMLImageElement>)['tilemap' + (skins[idx] ?? 1)] ?? assets.img.tilemap1;
     const pat = ctx.createPattern(assets.img.water, 'repeat');
     if (pat) { ctx.fillStyle = pat; ctx.fillRect(0, 0, ARENA_W, ARENA_H); }
+    // auto-foam preview: the game foams every shore edge by itself
+    const foamFrame = Math.floor(t * 10) % 16;
+    for (let r = 0; r < GRID_ROWS; r++) {
+      for (let c = 0; c < GRID_COLS; c++) {
+        if (!land(c, r)) continue;
+        if (land(c - 1, r) && land(c + 1, r) && land(c, r - 1) && land(c, r + 1)) continue;
+        ctx.drawImage(assets.img.foam, foamFrame * 192, 0, 192, 192, c * TILE + TILE / 2 - 96, r * TILE + TILE / 2 - 96, 192, 192);
+      }
+    }
+    drawDeco(true);
     for (let r = 0; r < GRID_ROWS; r++) {
       for (let c = 0; c < GRID_COLS; c++) {
         if (!land(c, r)) continue;
@@ -215,6 +229,10 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
         if (!land(c, r + 1, 2)) {
           const wx = L && R ? 6 : R ? 5 : L ? 7 : 8;
           ctx.drawImage(sheetFor(idx), wx * 64, 4 * 64, 64, 64, c * TILE, r * TILE + TILE - 40, TILE, TILE);
+          ctx.fillStyle = 'rgba(20, 30, 20, .18)';
+          ctx.fillRect(c * TILE - 2, r * TILE + TILE + 4, TILE + 4, 14);
+          ctx.fillStyle = 'rgba(20, 30, 20, .10)';
+          ctx.fillRect(c * TILE - 2, r * TILE + TILE + 18, TILE + 4, 10);
         }
         const sx = 320 + (L && R ? 1 : R ? 0 : L ? 2 : 3) * 64;
         const sy = (U && D ? 1 : D ? 0 : U ? 2 : 3) * 64;
@@ -224,12 +242,17 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     for (const sidx of stairs) {
       const sc2 = sidx % GRID_COLS;
       const sr2 = Math.floor(sidx / GRID_COLS);
-      ctx.drawImage(sheetFor(sidx), 192, 256, 64, 128, sc2 * TILE, sr2 * TILE - TILE + 12, TILE, TILE * 2);
+      ctx.save();
+      ctx.translate(sc2 * TILE + TILE / 2, 0);
+      if (stairsFlip.has(sidx)) ctx.scale(-1, 1);
+      ctx.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, sr2 * TILE - TILE, TILE, TILE * 2);
+      ctx.restore();
     }
-    deco.forEach((d, i) => {
+    drawDeco(false);
+    function drawDeco(under: boolean): void { deco.forEach((d, i) => {
       const img = (assets.img as Record<string, HTMLImageElement>)[d.img];
       const meta = DECO_META[d.img];
-      if (!img || !meta) return;
+      if (!img || !meta || Boolean(meta.under) !== under) return;
       const fw = meta.fw;
       const size = fw * d.scale;
       ctx.save();
@@ -242,7 +265,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
         ctx.strokeRect(-size / 2, -size * 0.7, size, size * (img.height / fw));
       }
       ctx.restore();
-    });
+    }); }
     // grid overlay
     ctx.strokeStyle = 'rgba(255,255,255,.08)';
     ctx.lineWidth = 1;

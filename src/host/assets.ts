@@ -154,11 +154,11 @@ export async function loadAssets(): Promise<Assets> {
 
 /** Placeable decoration metadata: frame width/height, frame count, anim fps.
  * Shared by the map maker palette and the in-game renderer. */
-export const DECO_META: Record<string, { fw: number; fh: number; frames: number; rate: number }> = {
-  tree1: { fw: 256, fh: 256, frames: 6, rate: 7 },
-  tree2: { fw: 256, fh: 256, frames: 6, rate: 7 },
-  tree3: { fw: 256, fh: 256, frames: 6, rate: 7 },
-  tree4: { fw: 256, fh: 256, frames: 6, rate: 7 },
+export const DECO_META: Record<string, { fw: number; fh: number; frames: number; rate: number; under?: boolean }> = {
+  tree1: { fw: 192, fh: 256, frames: 8, rate: 7 },
+  tree2: { fw: 192, fh: 256, frames: 8, rate: 7 },
+  tree3: { fw: 192, fh: 256, frames: 8, rate: 7 },
+  tree4: { fw: 192, fh: 256, frames: 8, rate: 7 },
   bush1: { fw: 128, fh: 128, frames: 8, rate: 7 },
   bush2: { fw: 128, fh: 128, frames: 8, rate: 7 },
   bush3: { fw: 128, fh: 128, frames: 8, rate: 7 },
@@ -173,8 +173,8 @@ export const DECO_META: Record<string, { fw: number; fh: number; frames: number;
   waterrock4: { fw: 64, fh: 64, frames: 16, rate: 8 },
   duck: { fw: 32, fh: 32, frames: 3, rate: 5 },
   sheepIdle: { fw: 128, fh: 128, frames: 6, rate: 6 },
-  shadow: { fw: 192, fh: 192, frames: 1, rate: 0 },
-  foam: { fw: 192, fh: 192, frames: 16, rate: 10 },
+  shadow: { fw: 192, fh: 192, frames: 1, rate: 0, under: true },
+  foam: { fw: 192, fh: 192, frames: 16, rate: 10, under: true },
   house_blue: { fw: 128, fh: 192, frames: 1, rate: 0 },
   house_red: { fw: 128, fh: 192, frames: 1, rate: 0 },
   house_yellow: { fw: 128, fh: 192, frames: 1, rate: 0 },

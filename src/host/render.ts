@@ -120,6 +120,7 @@ export class Renderer {
 
     this.waterLayer(c, dtMs);
     this.foamLayer(c, w.island);
+    this.customDeco(c, w, true);
     this.islandLayer(c, w.island);
     this.decoLayer(c, w);
     this.actorsLayer(c, w, dtMs);
@@ -223,6 +224,11 @@ export class Renderer {
             const wr = this.land(i, col + 1, r, 2) && !this.land(i, col + 1, r + 1, 2);
             const wx = wl && wr ? 6 : wr ? 5 : wl ? 7 : 8;
             ic.drawImage(sheet, wx * 64, 4 * 64, 64, 64, col * TILE, r * TILE + TILE - RAISE - 20, TILE, TILE);
+            // soft automatic shadow at the cliff base (one long strip, no tiling seams)
+            ic.fillStyle = 'rgba(20, 30, 20, .18)';
+            ic.fillRect(col * TILE - 2, r * TILE + TILE + 4, TILE + 4, 14);
+            ic.fillStyle = 'rgba(20, 30, 20, .10)';
+            ic.fillRect(col * TILE - 2, r * TILE + TILE + 18, TILE + 4, 10);
           }
           const [sx, sy] = this.autotileSrc(i, col, r, 2);
           ic.drawImage(sheet, 320 + sx, sy, 64, 64, col * TILE, r * TILE - RAISE, TILE, TILE);
@@ -231,29 +237,37 @@ export class Renderer {
       for (const sidx of i.stairs) {
         const scol = sidx % i.cols;
         const srow = Math.floor(sidx / i.cols);
-        ic.drawImage(sheetFor(sidx), 192, 256, 64, 128, scol * TILE, srow * TILE - TILE + 12, TILE, TILE * 2);
+        ic.save();
+        ic.translate(scol * TILE + TILE / 2, 0);
+        if (i.stairsFlip.has(sidx)) ic.scale(-1, 1);
+        ic.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, srow * TILE - TILE, TILE, TILE * 2);
+        ic.restore();
       }
       this.islandCache = { canvas, version: i.version };
     }
     c.drawImage(this.islandCache.canvas, 0, 0);
   }
 
+  private customDeco(c: CanvasRenderingContext2D, w: World, under: boolean): void {
+    if (!w.deco) return;
+    for (const d of w.deco) {
+      const img = (this.a.img as Record<string, HTMLImageElement>)[d.img];
+      const meta = DECO_META[d.img];
+      if (!img || !meta || Boolean(meta.under) !== under) continue;
+      const frame = meta.frames > 1 ? Math.floor(this.t * meta.rate) % meta.frames : 0;
+      const size = meta.fw * d.scale;
+      const dh = size * (meta.fh / meta.fw);
+      c.save();
+      c.translate(d.x, d.y);
+      c.rotate(d.rot);
+      c.drawImage(img, frame * meta.fw, 0, meta.fw, meta.fh, -size / 2, -dh * 0.7, size, dh);
+      c.restore();
+    }
+  }
+
   private decoLayer(c: CanvasRenderingContext2D, w?: World): void {
     if (w?.deco) {
-      for (const d of w.deco) {
-        const img = (this.a.img as Record<string, HTMLImageElement>)[d.img];
-        if (!img) continue;
-        const meta = DECO_META[d.img];
-        if (!meta) continue;
-        const frame = meta.frames > 1 ? Math.floor(this.t * meta.rate) % meta.frames : 0;
-        const size = meta.fw * d.scale;
-        const dh = size * (meta.fh / meta.fw);
-        c.save();
-        c.translate(d.x, d.y);
-        c.rotate(d.rot);
-        c.drawImage(img, frame * meta.fw, 0, meta.fw, meta.fh, -size / 2, -dh * 0.7, size, dh);
-        c.restore();
-      }
+      this.customDeco(c, w, false);
       return;
     }
     const bf = Math.floor(this.t * 7) % 8;

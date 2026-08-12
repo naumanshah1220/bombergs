@@ -12,6 +12,7 @@ export type Island = {
   cells: Cell[];        // level per cell
   skins: number[];      // tilemap color 1-5 per cell (cosmetic)
   stairs: Set<number>;  // cell indices that connect level 1 ↔ 2
+  stairsFlip: Set<number>; // subset of stairs drawn mirrored (facing right)
   version: number;      // bumped on damage — renderers key caches on it
 };
 
@@ -73,7 +74,7 @@ export function groundCells(i: Island, level?: Cell): { c: number; r: number }[]
  */
 export function generateIsland(cols: number, rows: number, rand: () => number = Math.random): Island {
   const cells = new Array<Cell>(cols * rows).fill(0);
-  const i: Island = { cols, rows, cells, skins: new Array(cols * rows).fill(1), stairs: new Set(), version: 0 };
+  const i: Island = { cols, rows, cells, skins: new Array(cols * rows).fill(1), stairs: new Set(), stairsFlip: new Set(), version: 0 };
   const left = 2;
   const top = 2;
   const right = cols - 3;
@@ -136,6 +137,7 @@ export type LevelData = {
   cells: number[];
   skins?: number[];
   stairs: number[];
+  stairsFlip?: number[];
   deco: DecoItem[];
 };
 
@@ -146,6 +148,7 @@ export function islandFromLevel(level: LevelData): Island {
     cells: [...level.cells] as Cell[],
     skins: level.skins ? [...level.skins] : new Array(level.cols * level.rows).fill(level.skin ?? 1),
     stairs: new Set(level.stairs),
+    stairsFlip: new Set(level.stairsFlip ?? []),
     version: 0,
   };
 }
@@ -174,6 +177,7 @@ export function destroyAt(i: Island, wx: number, wy: number): void {
   } else if (i.cells[idx] === 1) {
     i.cells[idx] = 0;
     i.stairs.delete(idx);
+    i.stairsFlip.delete(idx);
   } else return;
   i.version++;
 }
