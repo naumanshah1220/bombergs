@@ -52,6 +52,8 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
           padding:8px;border-radius:8px;font-weight:700">💾 SAVE</button>
         <select id="mload" style="width:100%;margin-top:6px;padding:6px;background:#131a3a;color:#eaf6ff"></select>
         <button id="mexport" style="width:100%;margin-top:6px;padding:6px;background:#131a3a;color:#eaf6ff;border:1px solid #29B6F6;border-radius:6px">⬇ export JSON</button>
+        <button id="mimport" style="width:100%;margin-top:6px;padding:6px;background:#131a3a;color:#eaf6ff;border:1px solid #29B6F6;border-radius:6px">⬆ import JSON</button>
+        <input id="mfile" type="file" accept=".json" style="display:none"/>
         <button id="mclear" style="width:100%;margin-top:6px;padding:6px;background:#131a3a;color:#eaf6ff;border:1px solid #29B6F6;border-radius:6px">🧹 clear map</button>
         <div style="opacity:.5;margin-top:10px">paint: click/drag · deco: click to place,
           click again to select · <a href="/" style="color:#29B6F6">back to game</a></div>
@@ -194,6 +196,39 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     nameInput.value = lv.name;
     selected = -1;
   });
+  document.getElementById('mimport')!.addEventListener('click', () => {
+    (document.getElementById('mfile') as HTMLInputElement).click();
+  });
+  (document.getElementById('mfile') as HTMLInputElement).addEventListener('change', (ev) => {
+    const file = (ev.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    file.text().then((txt) => {
+      try {
+        const lv = JSON.parse(txt) as LevelData;
+        cells = [...lv.cells] as Cell[];
+        skins = lv.skins ? [...lv.skins] : new Array(GRID_COLS * GRID_ROWS).fill(lv.skin ?? 1);
+        topSkins = lv.topSkins ? [...lv.topSkins] : [...skins];
+        stairs = new Set(lv.stairs);
+        stairsFlip = new Set(lv.stairsFlip ?? []);
+        deco = (lv.deco ?? []).map((d) => ({ ...d }));
+        nameInput.value = lv.name ?? 'imported';
+        selected = -1;
+      } catch {
+        alert('could not read that file as a level');
+      }
+    });
+  });
+  // continuous autosave: crash/reload insurance, shows up in the load list
+  setInterval(() => {
+    const levels = loadLevels();
+    levels['(autosave)'] = {
+      name: '(autosave)', skin, skins: [...skins], topSkins: [...topSkins],
+      cols: GRID_COLS, rows: GRID_ROWS, cells: [...cells],
+      stairs: [...stairs], stairsFlip: [...stairsFlip], deco: [...deco],
+    };
+    saveLevels(levels);
+    refreshLoad();
+  }, 3000);
   document.getElementById('mexport')!.addEventListener('click', () => {
     const name = nameInput.value.trim() || 'level';
     const blob = new Blob([JSON.stringify({ name, skin, skins, topSkins, cols: GRID_COLS, rows: GRID_ROWS, cells, stairs: [...stairs], stairsFlip: [...stairsFlip], deco }, null, 1)], { type: 'application/json' });
