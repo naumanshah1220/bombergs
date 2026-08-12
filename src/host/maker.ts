@@ -24,6 +24,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
   let stairs = new Set<number>();
   let stairsFlip = new Set<number>();
   let skins: number[] = new Array(GRID_COLS * GRID_ROWS).fill(1);
+  let topSkins: number[] = new Array(GRID_COLS * GRID_ROWS).fill(1);
   let deco: DecoItem[] = [];
   let tool: Tool = 'ground';
   let skin = 1; // tilemap color 1-5
@@ -110,10 +111,17 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     if (c < 0 || r < 0 || c >= GRID_COLS || r >= GRID_ROWS) return;
     const idx = r * GRID_COLS + c;
     if (tool === 'water') { cells[idx] = 0; stairs.delete(idx); stairsFlip.delete(idx); }
-    else if (tool === 'ground') { cells[idx] = 1; skins[idx] = skin; stairs.delete(idx); }
-    else if (tool === 'plateau') { cells[idx] = 2; skins[idx] = skin; stairs.delete(idx); }
-    else if (tool === 'stair') { cells[idx] = 1; skins[idx] = skin; stairs.add(idx); stairsFlip.delete(idx); }
-    else if (tool === 'stairflip') { cells[idx] = 1; skins[idx] = skin; stairs.add(idx); stairsFlip.add(idx); }
+    else if (tool === 'ground') { cells[idx] = 1; skins[idx] = skin; stairs.delete(idx); stairsFlip.delete(idx); }
+    else if (tool === 'plateau') {
+      if (cells[idx] === 0) skins[idx] = skin; // plateau on water: ground layer inherits
+      cells[idx] = 2; topSkins[idx] = skin; stairs.delete(idx); stairsFlip.delete(idx);
+    } else if (tool === 'stair') {
+      if (cells[idx] === 0) skins[idx] = skin;
+      cells[idx] = 2; topSkins[idx] = skin; stairs.add(idx); stairsFlip.delete(idx);
+    } else if (tool === 'stairflip') {
+      if (cells[idx] === 0) skins[idx] = skin;
+      cells[idx] = 2; topSkins[idx] = skin; stairs.add(idx); stairsFlip.add(idx);
+    }
   }
 
   canvas.addEventListener('mousedown', (e) => {
@@ -148,6 +156,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
   document.getElementById('mclear')!.addEventListener('click', () => {
     cells = new Array(GRID_COLS * GRID_ROWS).fill(0) as Cell[];
     skins = new Array(GRID_COLS * GRID_ROWS).fill(1);
+    topSkins = new Array(GRID_COLS * GRID_ROWS).fill(1);
     stairs = new Set();
     stairsFlip = new Set();
     deco = [];
@@ -166,7 +175,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     const name = nameInput.value.trim();
     if (!name) { alert('name the level first'); return; }
     const levels = loadLevels();
-    levels[name] = { name, skin, skins: [...skins], cols: GRID_COLS, rows: GRID_ROWS, cells: [...cells], stairs: [...stairs], stairsFlip: [...stairsFlip], deco: [...deco] };
+    levels[name] = { name, skin, skins: [...skins], topSkins: [...topSkins], cols: GRID_COLS, rows: GRID_ROWS, cells: [...cells], stairs: [...stairs], stairsFlip: [...stairsFlip], deco: [...deco] };
     saveLevels(levels);
     refreshLoad();
     alert(`saved "${name}" — it's now in the lobby's level picker`);
@@ -179,6 +188,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     stairsFlip = new Set(lv.stairsFlip ?? []);
     skin = lv.skin ?? 1;
     skins = lv.skins ? [...lv.skins] : new Array(GRID_COLS * GRID_ROWS).fill(skin);
+    topSkins = lv.topSkins ? [...lv.topSkins] : [...skins];
     (document.getElementById('mskin') as HTMLSelectElement).value = String(skin);
     deco = lv.deco.map((d) => ({ ...d }));
     nameInput.value = lv.name;
@@ -186,7 +196,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
   });
   document.getElementById('mexport')!.addEventListener('click', () => {
     const name = nameInput.value.trim() || 'level';
-    const blob = new Blob([JSON.stringify({ name, skin, skins, cols: GRID_COLS, rows: GRID_ROWS, cells, stairs: [...stairs], stairsFlip: [...stairsFlip], deco }, null, 1)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ name, skin, skins, topSkins, cols: GRID_COLS, rows: GRID_ROWS, cells, stairs: [...stairs], stairsFlip: [...stairsFlip], deco }, null, 1)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${name}.json`;
@@ -212,6 +222,8 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     ctx.scale(scale, scale);
     const sheetFor = (idx: number) =>
       (assets.img as Record<string, HTMLImageElement>)['tilemap' + (skins[idx] ?? 1)] ?? assets.img.tilemap1;
+    const sheetTopFor = (idx: number) =>
+      (assets.img as Record<string, HTMLImageElement>)['tilemap' + (topSkins[idx] ?? 1)] ?? assets.img.tilemap1;
     const pat = ctx.createPattern(assets.img.water, 'repeat');
     if (pat) { ctx.fillStyle = pat; ctx.fillRect(0, 0, ARENA_W, ARENA_H); }
     // auto-foam preview: the game foams every shore edge by itself
@@ -249,26 +261,27 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
         const idx = r * GRID_COLS + c;
         if (cells[idx] !== 2) continue;
         ctx.drawImage(assets.img.shadow, c * TILE + TILE / 2 - 96, r * TILE + TILE / 2 - 96 + 10, 192, 192);
-        const sk = skins[idx];
-        const L = same(c - 1, r, 2, sk); const R = same(c + 1, r, 2, sk);
-        const U = same(c, r - 1, 2, sk); const D = same(c, r + 1, 2, sk);
+        if (stairs.has(idx)) {
+          ctx.save();
+          ctx.translate(c * TILE + TILE / 2, 0);
+          if (stairsFlip.has(idx)) ctx.scale(-1, 1);
+          ctx.drawImage(sheetTopFor(idx), 192, 256, 64, 128, -TILE / 2, r * TILE - TILE, TILE, TILE * 2);
+          ctx.restore();
+          continue;
+        }
+        const sk = topSkins[idx];
+        const sameTop = (c2: number, r2: number) =>
+          land(c2, r2, 2) && topSkins[r2 * GRID_COLS + c2] === sk;
+        const L = sameTop(c - 1, r); const R = sameTop(c + 1, r);
+        const U = sameTop(c, r - 1); const D = sameTop(c, r + 1);
         if (!land(c, r + 1, 2)) {
           const wx = L && R ? 6 : R ? 5 : L ? 7 : 8;
-          ctx.drawImage(sheetFor(idx), wx * 64, 4 * 64, 64, 64, c * TILE, r * TILE, TILE, TILE);
+          ctx.drawImage(sheetTopFor(idx), wx * 64, 4 * 64, 64, 64, c * TILE, r * TILE, TILE, TILE);
         }
         const sx = 320 + (L && R ? 1 : R ? 0 : L ? 2 : 3) * 64;
         const sy = (U && D ? 1 : D ? 0 : U ? 2 : 3) * 64;
-        ctx.drawImage(sheetFor(idx), sx, sy, 64, 64, c * TILE, r * TILE - 64, TILE, TILE);
+        ctx.drawImage(sheetTopFor(idx), sx, sy, 64, 64, c * TILE, r * TILE - 64, TILE, TILE);
       }
-    }
-    for (const sidx of stairs) {
-      const sc2 = sidx % GRID_COLS;
-      const sr2 = Math.floor(sidx / GRID_COLS);
-      ctx.save();
-      ctx.translate(sc2 * TILE + TILE / 2, 0);
-      if (stairsFlip.has(sidx)) ctx.scale(-1, 1);
-      ctx.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, sr2 * TILE - TILE * 2, TILE, TILE * 2);
-      ctx.restore();
     }
     drawDeco(false);
     function drawDeco(under: boolean): void { deco.forEach((d, i) => {

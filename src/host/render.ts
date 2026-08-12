@@ -240,10 +240,22 @@ export class Renderer {
           ic.drawImage(this.a.img.shadow, col * TILE + TILE / 2 - 96, r * TILE + TILE / 2 - 96 + 10, 192, 192);
         }
       }
+      const sheetTop = (idx: number) =>
+        (this.a.img as Record<string, HTMLImageElement>)['tilemap' + (i.topSkins[idx] ?? 1)] ?? this.a.img.tilemap1;
       for (let r = 0; r < i.rows; r++) {
         for (let col = 0; col < i.cols; col++) {
           if (!this.land(i, col, r, 2)) continue;
-          const sheet = sheetFor(r * i.cols + col);
+          const cellIdx = r * i.cols + col;
+          if (i.stairs.has(cellIdx)) {
+            // the staircase IS this cell's wall + surface
+            ic.save();
+            ic.translate(col * TILE + TILE / 2, 0);
+            if (i.stairsFlip.has(cellIdx)) ic.scale(-1, 1);
+            ic.drawImage(sheetTop(cellIdx), 192, 256, 64, 128, -TILE / 2, r * TILE - TILE, TILE, TILE * 2);
+            ic.restore();
+            continue;
+          }
+          const sheet = sheetTop(cellIdx);
           const southLower = !this.land(i, col, r + 1, 2);
           if (southLower) {
             // cliff wall filling the seam below the raised top
@@ -255,15 +267,6 @@ export class Renderer {
           const [sx, sy] = this.autotileSrc(i, col, r, 2);
           ic.drawImage(sheet, 320 + sx, sy, 64, 64, col * TILE, r * TILE - RAISE, TILE, TILE);
         }
-      }
-      for (const sidx of i.stairs) {
-        const scol = sidx % i.cols;
-        const srow = Math.floor(sidx / i.cols);
-        ic.save();
-        ic.translate(scol * TILE + TILE / 2, 0);
-        if (i.stairsFlip.has(sidx)) ic.scale(-1, 1);
-        ic.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, srow * TILE - TILE * 2, TILE, TILE * 2);
-        ic.restore();
       }
       this.islandCache = { canvas, version: i.version };
     }

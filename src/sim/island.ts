@@ -10,7 +10,8 @@ export type Island = {
   cols: number;
   rows: number;
   cells: Cell[];        // level per cell
-  skins: number[];      // tilemap color 1-5 per cell (cosmetic)
+  skins: number[];      // GROUND layer tilemap color 1-5 per cell
+  topSkins: number[];   // PLATEAU layer tilemap color per cell
   stairs: Set<number>;  // cell indices that connect level 1 ↔ 2
   stairsFlip: Set<number>; // subset of stairs drawn mirrored (facing right)
   version: number;      // bumped on damage — renderers key caches on it
@@ -74,7 +75,7 @@ export function groundCells(i: Island, level?: Cell): { c: number; r: number }[]
  */
 export function generateIsland(cols: number, rows: number, rand: () => number = Math.random): Island {
   const cells = new Array<Cell>(cols * rows).fill(0);
-  const i: Island = { cols, rows, cells, skins: new Array(cols * rows).fill(1), stairs: new Set(), stairsFlip: new Set(), version: 0 };
+  const i: Island = { cols, rows, cells, skins: new Array(cols * rows).fill(1), topSkins: new Array(cols * rows).fill(1), stairs: new Set(), stairsFlip: new Set(), version: 0 };
   const left = 2;
   const top = 2;
   const right = cols - 3;
@@ -112,16 +113,11 @@ export function generateIsland(cols: number, rows: number, rand: () => number = 
       }
     }
     if (placed) {
-      // stairs live OUTSIDE the plateau: the low-ground cell touching its
-      // south face (and north face for wide patches) becomes the way up
+      // stairs are plateau EDGE cells: the staircase replaces that cell's
+      // cliff wall, connecting its top to the ground below
       const sc = pc + Math.floor(rand() * pw);
-      const sIdx = cellIndex(i, sc, pr + ph);
-      if (cells[sIdx] === 1 && cells[cellIndex(i, sc, pr + ph - 1)] === 2) i.stairs.add(sIdx);
-      if (pw >= 3) {
-        const nc = pc + Math.floor(rand() * pw);
-        const nIdx = cellIndex(i, nc, pr - 1);
-        if (cells[nIdx] === 1 && cells[cellIndex(i, nc, pr)] === 2) i.stairs.add(nIdx);
-      }
+      const sIdx = cellIndex(i, sc, pr + ph - 1);
+      if (cells[sIdx] === 2 && cells[cellIndex(i, sc, pr + ph)] === 1) i.stairs.add(sIdx);
     }
   }
   return i;
@@ -136,6 +132,7 @@ export type LevelData = {
   rows: number;
   cells: number[];
   skins?: number[];
+  topSkins?: number[];
   stairs: number[];
   stairsFlip?: number[];
   deco: DecoItem[];
@@ -147,6 +144,9 @@ export function islandFromLevel(level: LevelData): Island {
     rows: level.rows,
     cells: [...level.cells] as Cell[],
     skins: level.skins ? [...level.skins] : new Array(level.cols * level.rows).fill(level.skin ?? 1),
+    topSkins: level.topSkins
+      ? [...level.topSkins]
+      : level.skins ? [...level.skins] : new Array(level.cols * level.rows).fill(level.skin ?? 1),
     stairs: new Set(level.stairs),
     stairsFlip: new Set(level.stairsFlip ?? []),
     version: 0,
@@ -174,6 +174,8 @@ export function destroyAt(i: Island, wx: number, wy: number): void {
   const idx = cellIndex(i, c, r);
   if (i.cells[idx] === 2) {
     i.cells[idx] = 1;
+    i.stairs.delete(idx);
+    i.stairsFlip.delete(idx);
   } else if (i.cells[idx] === 1) {
     i.cells[idx] = 0;
     i.stairs.delete(idx);

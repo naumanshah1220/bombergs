@@ -143,15 +143,19 @@ function dye(sheet: HTMLImageElement, keys: [number, number, number][], color: s
   ctx.drawImage(sheet, 0, 0);
   const im = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const d = im.data;
+  const TOL = 42 * 42; // catch antialiased fringe pixels around the tunic
   for (let k = 0; k < d.length; k += 4) {
     if (d[k + 3] <= 10) continue;
     for (let s = 0; s < sorted.length; s++) {
       const [kr, kg, kb] = sorted[s];
-      if (d[k] === kr && d[k + 1] === kg && d[k + 2] === kb) {
+      const dist = (d[k] - kr) ** 2 + (d[k + 1] - kg) ** 2 + (d[k + 2] - kb) ** 2;
+      if (dist < TOL) {
         const f = s === 0 ? 1 : 0.62;
-        d[k] = Math.round(pr * f);
-        d[k + 1] = Math.round(pg * f);
-        d[k + 2] = Math.round(pb * f);
+        // preserve the pixel's own brightness relative to the key
+        const lum = (d[k] + d[k + 1] + d[k + 2]) / Math.max(kr + kg + kb, 1);
+        d[k] = Math.min(255, Math.round(pr * f * lum));
+        d[k + 1] = Math.min(255, Math.round(pg * f * lum));
+        d[k + 2] = Math.min(255, Math.round(pb * f * lum));
         break;
       }
     }

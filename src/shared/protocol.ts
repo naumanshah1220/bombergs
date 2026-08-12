@@ -23,7 +23,7 @@ export type H2C =
 /** 8 player colors, index = slot. */
 export const PLAYER_COLORS = [
   '#FF5A5F', '#FFB400', '#3DDC84', '#29B6F6',
-  '#AB47BC', '#FF7043', '#EC407A', '#8D6E63',
+  '#AB47BC', '#FF7043', '#EC407A', '#00E5FF',
 ] as const;
 
 /** Room-code alphabet: A–Z minus I and O (easily confused with 1 and 0). */
