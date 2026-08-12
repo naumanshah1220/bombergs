@@ -28,26 +28,29 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
   let painting = false;
 
   app.innerHTML = `
-    <div style="display:flex;height:100%">
-      <div style="width:230px;background:#0e1430;padding:12px;overflow-y:auto;font-size:13px">
+    <div style="display:flex;height:100%;flex-direction:row">
+      <div style="flex:0 0 240px;box-sizing:border-box;background:#0e1430;padding:12px;
+           overflow-y:auto;font-size:13px;color:#eaf6ff">
         <div style="font-weight:800;font-size:17px;margin-bottom:8px">🛠 MAP MAKER</div>
         <div id="tools"></div>
         <div style="margin:10px 0 4px;opacity:.6">SELECTED DECO</div>
         <label>scale <input id="mscale" type="range" min="0.3" max="2.5" step="0.05" value="1" style="width:100%"></label>
         <label>rotate <input id="mrot" type="range" min="-3.14" max="3.14" step="0.05" value="0" style="width:100%"></label>
-        <button id="mdel" style="width:100%;margin-top:4px">🗑 delete selected</button>
+        <button id="mdel" style="width:100%;margin-top:4px;padding:6px;background:#131a3a;color:#eaf6ff;border:1px solid #ff5a5f;border-radius:6px">🗑 delete selected</button>
         <div style="margin:12px 0 4px;opacity:.6">LEVEL</div>
         <input id="mname" placeholder="level name" style="width:100%;padding:6px;background:#131a3a;
           color:#eaf6ff;border:1px solid #29B6F6;border-radius:6px"/>
         <button id="msave" style="width:100%;margin-top:6px;background:#3DDC84;border:none;
           padding:8px;border-radius:8px;font-weight:700">💾 SAVE</button>
         <select id="mload" style="width:100%;margin-top:6px;padding:6px;background:#131a3a;color:#eaf6ff"></select>
-        <button id="mexport" style="width:100%;margin-top:6px">⬇ export JSON</button>
-        <button id="mclear" style="width:100%;margin-top:6px">🧹 clear map</button>
+        <button id="mexport" style="width:100%;margin-top:6px;padding:6px;background:#131a3a;color:#eaf6ff;border:1px solid #29B6F6;border-radius:6px">⬇ export JSON</button>
+        <button id="mclear" style="width:100%;margin-top:6px;padding:6px;background:#131a3a;color:#eaf6ff;border:1px solid #29B6F6;border-radius:6px">🧹 clear map</button>
         <div style="opacity:.5;margin-top:10px">paint: click/drag · deco: click to place,
           click again to select · <a href="/" style="color:#29B6F6">back to game</a></div>
       </div>
-      <canvas id="mcanvas" style="flex:1;display:block"></canvas>
+      <div style="flex:1 1 0;min-width:0;position:relative">
+        <canvas id="mcanvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+      </div>
     </div>`;
 
   const toolsDiv = document.getElementById('tools')!;
