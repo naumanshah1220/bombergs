@@ -83,13 +83,6 @@ export class Renderer {
         this.booms.push({ x: e.at.x, y: e.at.y, age: 0 });
         this.shockwaves.push({ x: e.at.x, y: e.at.y, age: 0 });
       }
-      if (e.kind === 'launched') {
-        const ang = Math.random() * Math.PI * 2;
-        this.tumbles.push({
-          slot: e.slot, x: e.at.x, y: e.at.y,
-          vx: Math.cos(ang) * 170, vy: Math.sin(ang) * 170 - 230, age: 0,
-        });
-      }
       if (e.kind === 'blink') {
         for (const spot of [e.from, e.to]) {
           for (let i = 0; i < 10; i++) {
@@ -314,6 +307,36 @@ export class Renderer {
     const speed = Math.hypot(p.vel.x, p.vel.y);
     if (Math.abs(p.vel.x) > 10) this.facing.set(p.slot, Math.sign(p.vel.x));
     const face = this.facing.get(p.slot) ?? 1;
+
+    // special states replace the normal body entirely
+    if (p.sinkMs > 0) {
+      const t = 1 - p.sinkMs / 750;
+      c.save();
+      c.globalAlpha = Math.max(1 - t * 1.15, 0);
+      c.drawImage(sheets.idle, 0, 0, PAWN.FW, PAWN.FH,
+        p.pos.x - UNIT / 2, p.pos.y - UNIT * 0.62 + t * 34, UNIT, UNIT);
+      c.restore();
+      return;
+    }
+    if (p.thrownMs > 0) {
+      const t = 1 - p.thrownMs / 900;
+      const grow = 1 + Math.sin(Math.PI * t) * 0.9; // up toward the camera, back down
+      c.save();
+      c.translate(p.pos.x, p.pos.y - Math.sin(Math.PI * t) * 60);
+      c.rotate(t * 9);
+      const size = UNIT * 0.7 * grow;
+      c.drawImage(sheets.idle, 0, 0, PAWN.FW, PAWN.FH, -size / 2, -size / 2, size, size);
+      c.restore();
+      return;
+    }
+    if (p.downMs > 0) {
+      c.save();
+      c.translate(p.pos.x, p.pos.y);
+      c.rotate(Math.PI / 2);
+      c.drawImage(sheets.idle, 0, 0, PAWN.FW, PAWN.FH, -UNIT / 2, -UNIT * 0.62, UNIT, UNIT);
+      c.restore();
+      return;
+    }
 
     // player identity: bold color ring on the ground, always visible
     c.save();

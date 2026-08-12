@@ -6,7 +6,7 @@
 
 import { BOMB, carrierSlot } from './bomb';
 import { ARENA_H, ARENA_W } from './constants';
-import { isGround } from './island';
+import { cellAt, isGround, nearestStair } from './island';
 import type { Penguin, World } from './world';
 
 export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; throttle?: number } {
@@ -27,6 +27,14 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; 
       if (d < bestD) { bestD = d; best = q; }
     }
     if (best) {
+      // different elevation? path via the nearest stairs instead of face-planting
+      if (cellAt(w.island, p.pos.x, p.pos.y) !== cellAt(w.island, best.pos.x, best.pos.y)) {
+        const stair = nearestStair(w.island, p.pos);
+        if (stair) {
+          const aimS = Math.atan2(stair.y - p.pos.y, stair.x - p.pos.x);
+          return { steer: turnToward(p.heading, aimS), tap: bestD < BOMB.PASS_RADIUS * 0.8 };
+        }
+      }
       // slight lead on the target's velocity makes bots feel intentional
       const aim = Math.atan2(
         best.pos.y + best.vel.y * 0.25 - p.pos.y,
@@ -79,6 +87,11 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; 
     return { steer: turnToward(p.heading, aim), tap: false };
   }
 
+  // idle on a plateau? amble toward the stairs so you don't get marooned
+  if (cellAt(w.island, p.pos.x, p.pos.y) === 2 && w.tick % 3 === 0) {
+    const stair = nearestStair(w.island, p.pos);
+    if (stair) return { steer: turnToward(p.heading, Math.atan2(stair.y - p.pos.y, stair.x - p.pos.x)), tap: false };
+  }
   return { steer: wander(w, p), tap: false };
 }
 

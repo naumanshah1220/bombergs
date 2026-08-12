@@ -61,9 +61,11 @@ describe('trolley physics', () => {
     expect(events.map((e) => e.kind)).toContain('splash');
     expect(events.map((e) => e.kind)).toContain('lifeLost');
     expect(events.map((e) => e.kind)).not.toContain('eliminated');
-    // burn the remaining lives
+    // burn the remaining lives (letting each sink animation finish first)
     for (let i = 0; i < 2; i++) {
+      for (let k = 0; k < 60; k++) step(w, 16); // finish sinking + respawn
       p.pos.x = 10000;
+      p.invulnMs = 0;
       events = step(w, 16);
     }
     expect(p.alive).toBe(false);

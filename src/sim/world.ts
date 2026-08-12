@@ -30,7 +30,12 @@ export type Penguin = {
   speedMult: number;
   alive: boolean;
   lives: number;
-  invulnMs: number;  // post-hit mercy: no blast damage, flashing
+  invulnMs: number;  // post-hit mercy: no blast damage
+  sinkMs: number;    // >0: underwater, drifting down + fading, then respawn
+  thrownMs: number;  // >0: airborne after a blast, flying to thrownTo
+  downMs: number;    // >0: lying flat after landing, then gets up
+  thrownFrom: Vec2;
+  thrownTo: Vec2;
   isDummy: boolean;  // bot-driven
   ability?: { id: AbilityId; cooldownMs: number };
   shieldMs: number;  // >0 = ice shield up
@@ -111,6 +116,11 @@ export function makeWorld(
       alive: true,
       lives: rules.lives,
       invulnMs: 0,
+      sinkMs: 0,
+      thrownMs: 0,
+      downMs: 0,
+      thrownFrom: { x: 0, y: 0 },
+      thrownTo: { x: 0, y: 0 },
       isDummy: p.isDummy ?? false,
       ability: p.ability ? { id: p.ability, cooldownMs: 0 } : undefined,
       shieldMs: 0,
@@ -158,6 +168,32 @@ export function step(w: World, dtMs: number): WorldEvent[] {
 
   for (const p of w.penguins) {
     if (!p.alive) continue;
+    // incapacitated states run their timers and skip control entirely
+    if (p.sinkMs > 0) {
+      p.sinkMs -= dtMs;
+      p.vel.x *= 0.94;
+      p.vel.y *= 0.94;
+      p.pos.x += p.vel.x * dt;
+      p.pos.y += p.vel.y * dt;
+      if (p.sinkMs <= 0) {
+        p.pos = respawnPoint(w);
+        p.vel = { x: 0, y: 0 };
+      }
+      continue;
+    }
+    if (p.thrownMs > 0) {
+      p.thrownMs -= dtMs;
+      const tt = 1 - Math.max(p.thrownMs, 0) / 900;
+      p.pos.x = p.thrownFrom.x + (p.thrownTo.x - p.thrownFrom.x) * tt;
+      p.pos.y = p.thrownFrom.y + (p.thrownTo.y - p.thrownFrom.y) * tt;
+      p.vel = { x: 0, y: 0 };
+      if (p.thrownMs <= 0) p.downMs = 500;
+      continue;
+    }
+    if (p.downMs > 0) {
+      p.downMs -= dtMs;
+      continue;
+    }
     if (p.isDummy) {
       const input = botInputs(w, p);
       p.steer = input.steer;
@@ -192,12 +228,14 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     p.vel.x += (thrust.x - p.vel.x) * k;
     p.vel.y += (thrust.y - p.vel.y) * k;
 
-    // axis-separated slide against cliff edges (stairs pass, water enters)
+    // axis-separated slide; test the LEADING EDGE (radius margin) so bodies
+    // never visually straddle a cliff face
+    const R = TUNE.PENGUIN_RADIUS * 0.8;
     const nx = p.pos.x + p.vel.x * dt;
-    if (blockedStep(w, p.pos, nx, p.pos.y)) p.vel.x = 0;
+    if (blockedStep(w, p.pos, nx + Math.sign(p.vel.x) * R, p.pos.y)) p.vel.x = 0;
     else p.pos.x = nx;
     const ny = p.pos.y + p.vel.y * dt;
-    if (blockedStep(w, p.pos, p.pos.x, ny)) p.vel.y = 0;
+    if (blockedStep(w, p.pos, p.pos.x, ny + Math.sign(p.vel.y) * R)) p.vel.y = 0;
     else p.pos.y = ny;
   }
 
@@ -229,13 +267,11 @@ export function step(w: World, dtMs: number): WorldEvent[] {
   // Water check — falling in costs a life.
   for (const p of w.penguins) {
     if (!p.alive) continue;
-    if (w.rules.edgeDeath && cellAt(w.island, p.pos.x, p.pos.y) === 0) {
+    if (w.rules.edgeDeath && p.sinkMs <= 0 && p.thrownMs <= 0
+        && cellAt(w.island, p.pos.x, p.pos.y) === 0) {
       events.push({ kind: 'splash', slot: p.slot, at: { ...p.pos } });
       events.push(...loseLife(w, p, p.pos));
-      if (p.alive) {
-        p.pos = respawnPoint(w);
-        p.vel = { x: 0, y: 0 };
-      }
+      if (p.alive) p.sinkMs = 750; // overshoot, go under, fade — then respawn
     }
   }
 

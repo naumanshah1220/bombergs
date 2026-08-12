@@ -110,17 +110,33 @@ export function generateIsland(cols: number, rows: number, rand: () => number = 
       }
     }
     if (placed) {
-      // stair on the south edge (and a second on the north for big patches)
+      // stairs live OUTSIDE the plateau: the low-ground cell touching its
+      // south face (and north face for wide patches) becomes the way up
       const sc = pc + Math.floor(rand() * pw);
-      const sIdx = cellIndex(i, sc, pr + ph - 1);
-      if (cells[sIdx] === 2) i.stairs.add(sIdx);
+      const sIdx = cellIndex(i, sc, pr + ph);
+      if (cells[sIdx] === 1 && cells[cellIndex(i, sc, pr + ph - 1)] === 2) i.stairs.add(sIdx);
       if (pw >= 3) {
-        const nIdx = cellIndex(i, pc + Math.floor(rand() * pw), pr);
-        if (cells[nIdx] === 2) i.stairs.add(nIdx);
+        const nc = pc + Math.floor(rand() * pw);
+        const nIdx = cellIndex(i, nc, pr - 1);
+        if (cells[nIdx] === 1 && cells[cellIndex(i, nc, pr)] === 2) i.stairs.add(nIdx);
       }
     }
   }
   return i;
+}
+
+/** Nearest stair cell center to a world point (bot pathing aid). */
+export function nearestStair(i: Island, p: Vec2): Vec2 | undefined {
+  let best: Vec2 | undefined;
+  let bestD = Infinity;
+  for (const idx of i.stairs) {
+    const c = idx % i.cols;
+    const r = Math.floor(idx / i.cols);
+    const q = cellCenter(i, c, r);
+    const d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (d < bestD) { bestD = d; best = q; }
+  }
+  return best;
 }
 
 /** Blast damage: plateau flattens, ground opens to water; stairs drop too. */
@@ -130,9 +146,9 @@ export function destroyAt(i: Island, wx: number, wy: number): void {
   const idx = cellIndex(i, c, r);
   if (i.cells[idx] === 2) {
     i.cells[idx] = 1;
-    i.stairs.delete(idx);
   } else if (i.cells[idx] === 1) {
     i.cells[idx] = 0;
+    i.stairs.delete(idx);
   } else return;
   i.version++;
 }

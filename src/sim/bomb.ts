@@ -6,9 +6,9 @@
 // pass by ramming someone — plus a speed boost that makes a cornered carrier
 // genuinely dangerous.
 
-import { KNOCKBACK, TUNE } from './constants';
+import { TUNE } from './constants';
 import { destroyAt, type Vec2 } from './island';
-import { loseLife, type Penguin, type World, type WorldEvent } from './world';
+import { loseLife, respawnPoint, type Penguin, type World, type WorldEvent } from './world';
 
 export const BOMB = {
   IDLE_MS: 1500,        // breather before the skua appears
@@ -246,10 +246,12 @@ function explode(w: World, at: Vec2, events: WorldEvent[]): void {
       events.push({ kind: 'launched', slot: p.slot, at: { ...p.pos } });
       events.push(...loseLife(w, p, p.pos));
       if (p.alive) {
-        // comic knockback away from the blast (survivors go flying)
-        const a = Math.atan2(p.pos.y - at.y, p.pos.x - at.x) + (d < 1 ? Math.random() * 6.28 : 0);
-        p.vel.x += Math.cos(a) * KNOCKBACK;
-        p.vel.y += Math.sin(a) * KNOCKBACK;
+        // blown sky-high: fly to a random landing spot, lie there, get up.
+        // No respawn blink — that mercy look is reserved for water falls.
+        p.thrownFrom = { ...p.pos };
+        p.thrownTo = respawnPoint(w);
+        p.thrownMs = 900;
+        p.invulnMs = 900 + 500 + 800; // safe until back on their feet
       }
     }
   }
