@@ -121,7 +121,7 @@ export class Renderer {
     this.waterLayer(c, dtMs);
     this.foamLayer(c, w.island);
     this.islandLayer(c, w.island);
-    this.decoLayer(c);
+    this.decoLayer(c, w);
     this.actorsLayer(c, w, dtMs);
     this.bombLayer(c, w);
     this.updateBooms(c, dtMs);
@@ -229,7 +229,24 @@ export class Renderer {
     c.drawImage(this.islandCache.canvas, 0, 0);
   }
 
-  private decoLayer(c: CanvasRenderingContext2D): void {
+  private decoLayer(c: CanvasRenderingContext2D, w?: World): void {
+    if (w?.deco) {
+      for (const d of w.deco) {
+        const img = (this.a.img as Record<string, HTMLImageElement>)[d.img];
+        if (!img) continue;
+        const animated = d.img.startsWith('bush') || d.img.startsWith('tree');
+        const fw = d.img.startsWith('tree') ? 256 : d.img.startsWith('bush') ? 128 : img.width;
+        const frames = d.img.startsWith('tree') ? 6 : d.img.startsWith('bush') ? 8 : 1;
+        const frame = animated ? Math.floor(this.t * 7) % frames : 0;
+        const size = fw * d.scale;
+        c.save();
+        c.translate(d.x, d.y);
+        c.rotate(d.rot);
+        c.drawImage(img, frame * fw, 0, fw, img.height, -size / 2, -size * 0.7, size, size * (img.height / fw));
+        c.restore();
+      }
+      return;
+    }
     const bf = Math.floor(this.t * 7) % 8;
     for (const d of this.deco) {
       const img = this.a.img[d.img];
@@ -310,11 +327,25 @@ export class Renderer {
 
     // special states replace the normal body entirely
     if (p.sinkMs > 0) {
+      // submerge BEHIND the waterline: clip to above the entry point, slide
+      // the body down out of the clip — it visibly goes under, not over
       const t = 1 - p.sinkMs / 750;
       c.save();
-      c.globalAlpha = Math.max(1 - t * 1.15, 0);
+      c.beginPath();
+      c.rect(p.pos.x - UNIT, p.pos.y - UNIT * 1.2, UNIT * 2, UNIT * 1.2 + 10);
+      c.clip();
+      c.globalAlpha = Math.max(1 - t * 0.45, 0.4);
       c.drawImage(sheets.idle, 0, 0, PAWN.FW, PAWN.FH,
-        p.pos.x - UNIT / 2, p.pos.y - UNIT * 0.62 + t * 34, UNIT, UNIT);
+        p.pos.x - UNIT / 2, p.pos.y - UNIT * 0.62 + t * t * UNIT * 0.75, UNIT, UNIT);
+      c.restore();
+      // ripple at the waterline while going under
+      c.save();
+      c.globalAlpha = 0.5;
+      c.strokeStyle = '#eaffff';
+      c.lineWidth = 2.5;
+      c.beginPath();
+      c.ellipse(p.pos.x, p.pos.y + 6, 20 + t * 10, 8 + t * 3, 0, 0, Math.PI * 2);
+      c.stroke();
       c.restore();
       return;
     }

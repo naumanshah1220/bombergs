@@ -125,6 +125,27 @@ export function generateIsland(cols: number, rows: number, rand: () => number = 
   return i;
 }
 
+/** A hand-authored level from the map maker. */
+export type DecoItem = { img: string; x: number; y: number; scale: number; rot: number };
+export type LevelData = {
+  name: string;
+  cols: number;
+  rows: number;
+  cells: number[];
+  stairs: number[];
+  deco: DecoItem[];
+};
+
+export function islandFromLevel(level: LevelData): Island {
+  return {
+    cols: level.cols,
+    rows: level.rows,
+    cells: [...level.cells] as Cell[],
+    stairs: new Set(level.stairs),
+    version: 0,
+  };
+}
+
 /** Nearest stair cell center to a world point (bot pathing aid). */
 export function nearestStair(i: Island, p: Vec2): Vec2 | undefined {
   let best: Vec2 | undefined;

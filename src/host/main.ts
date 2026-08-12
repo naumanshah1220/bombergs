@@ -7,6 +7,8 @@ import { fuseFrac, idleBomb } from '../sim/bomb';
 import { TUNE, type Tunables } from '../sim/constants';
 import { makeWorld, step, type World, type WorldEvent } from '../sim/world';
 import { loadAssets, type Assets } from './assets';
+import { loadLevels, startMaker } from './maker';
+import type { LevelData } from '../sim/island';
 import { Sfx } from './audio';
 import { Renderer } from './render';
 import { createRoom, type Room } from './net';
@@ -24,9 +26,18 @@ let loopGen = 0;
 
 type Roster = { slot: number; name: string; color: string; isBot: boolean };
 let roster: Roster[] = [];
+let selectedLevel = '';
+
+function pickedLevel(): LevelData | undefined {
+  return selectedLevel ? loadLevels()[selectedLevel] : undefined;
+}
 let placements: number[] = []; // slots in elimination order (first out first)
 
 function boot(): void {
+  if (new URLSearchParams(location.search).get('maker') === '1') {
+    void loadAssets().then((a) => startMaker(app, a));
+    return;
+  }
   app.innerHTML = `<div style="display:grid;place-items:center;height:100%">
     <div style="font-size:24px;opacity:.7">Opening room…</div></div>`;
   void loadAssets().then((a) => { assets = a; });
@@ -82,10 +93,19 @@ async function renderLobby(): Promise<void> {
         <button id="practice" style="margin-top:12px;font-size:17px;padding:11px 34px;
           border-radius:12px;border:2px solid #29B6F6;background:transparent;color:#29B6F6;
           font-weight:700;cursor:pointer;display:block">🎯 PRACTICE — walk around, tune the controls</button>
+        <div style="margin-top:14px">
+          <select id="levelsel" style="padding:8px;background:#131a3a;color:#eaf6ff;
+            border:1px solid #29B6F6;border-radius:8px;min-width:220px"></select>
+          <a href="/?maker=1" style="color:#29B6F6;margin-left:10px">🛠 map maker</a>
+        </div>
       </div>
     </div>`;
   document.getElementById('start')!.addEventListener('click', startMatch);
   document.getElementById('practice')!.addEventListener('click', startPractice);
+  const levelSel = document.getElementById('levelsel') as HTMLSelectElement;
+  levelSel.innerHTML = '<option value="">🎲 random island</option>'
+    + Object.keys(loadLevels()).map((n) => `<option${n === selectedLevel ? ' selected' : ''}>${n}</option>`).join('');
+  levelSel.addEventListener('change', () => { selectedLevel = levelSel.value; });
   const qrCanvas = document.getElementById('qr') as HTMLCanvasElement;
   await QRCode.toCanvas(qrCanvas, join, { width: 240, margin: 1, color: { dark: '#0b1026', light: '#eaf6ff' } });
   renderList();
@@ -237,7 +257,7 @@ function startMatch(): void {
   sfx ??= new Sfx(); // constructed on the START click = user gesture
   sfx.resume();
   mountTunePanel();
-  world = makeWorld(roster.map((r) => ({ slot: r.slot, name: r.name, color: r.color, isDummy: r.isBot })));
+  world = makeWorld(roster.map((r) => ({ slot: r.slot, name: r.name, color: r.color, isDummy: r.isBot })), Math.random, undefined, pickedLevel());
   gameScreenDom(`LAST GOBLIN STANDING 💣<br/>
     <span style="font-size:20px;opacity:.85">3 lives each · grab crates for abilities · hearts heal</span>`);
   renderLivesBar();

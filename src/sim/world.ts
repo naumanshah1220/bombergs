@@ -10,7 +10,7 @@ import {
 } from './constants';
 import {
   canStep, cellAt, cellCenter, generateIsland, groundCells, isGround,
-  type Island, type Vec2,
+  islandFromLevel, type DecoItem, type Island, type LevelData, type Vec2,
 } from './island';
 import type { AbilityId } from '../shared/protocol';
 
@@ -78,6 +78,7 @@ export type WorldEvent =
 export type World = {
   penguins: Penguin[];
   island: Island;
+  deco?: DecoItem[]; // hand-placed decorations from the map maker
   bomb: BombState;
   rules: StageRules;
   pickups: Pickup[];
@@ -90,8 +91,9 @@ export function makeWorld(
   players: { slot: number; name: string; color: string; isDummy?: boolean; ability?: AbilityId }[],
   rand: () => number = Math.random,
   rules: StageRules = DEFAULT_RULES,
+  level?: LevelData,
 ): World {
-  const island = generateIsland(GRID_COLS, GRID_ROWS, rand);
+  const island = level ? islandFromLevel(level) : generateIsland(GRID_COLS, GRID_ROWS, rand);
   // spawn spread: ground cells sorted by angle around the center, sampled evenly
   const cx = (GRID_COLS * 64) / 2;
   const cy = (GRID_ROWS * 64) / 2;
@@ -127,7 +129,7 @@ export function makeWorld(
     };
   });
   return {
-    penguins, island, bomb: idleBomb(), rules,
+    penguins, island, deco: level?.deco, bomb: idleBomb(), rules,
     pickups: [], pickupTimerMs: PICKUP_INTERVAL_MS / 2, nextPickupId: 1,
     tick: 0,
   };
