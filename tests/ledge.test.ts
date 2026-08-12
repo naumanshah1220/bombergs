@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeWorld, step } from './src/sim/world';
+import { makeWorld, step } from '../src/sim/world';
 
 describe('ledge blocking', () => {
   it('cannot walk from ground onto plateau without stairs', () => {
