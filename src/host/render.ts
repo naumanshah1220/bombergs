@@ -206,11 +206,38 @@ export class Renderer {
       const RAISE = 64; // full-tile cliffs, the way the tileset is drawn
       const sheetFor = (idx: number) =>
         (this.a.img as Record<string, HTMLImageElement>)['tilemap' + (i.skins[idx] ?? 1)] ?? this.a.img.tilemap1;
+      // underlay: where color patches meet, fill beneath with the neighbor
+      // color so rounded patch edges never show water
+      const neighborSkin = (col: number, r: number): number | undefined => {
+        const mySkin = i.skins[r * i.cols + col];
+        for (const [dc, dr] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+          const nc = col + dc;
+          const nr = r + dr;
+          if (nc < 0 || nr < 0 || nc >= i.cols || nr >= i.rows) continue;
+          if (i.cells[nr * i.cols + nc] >= 1 && i.skins[nr * i.cols + nc] !== mySkin) {
+            return i.skins[nr * i.cols + nc];
+          }
+        }
+        return undefined;
+      };
+      const sheetOf = (skin: number) =>
+        (this.a.img as Record<string, HTMLImageElement>)['tilemap' + skin] ?? this.a.img.tilemap1;
       for (let r = 0; r < i.rows; r++) {
         for (let col = 0; col < i.cols; col++) {
           if (!this.land(i, col, r)) continue;
+          const und = neighborSkin(col, r);
+          if (und !== undefined) {
+            ic.drawImage(sheetOf(und), 64, 64, 64, 64, col * TILE, r * TILE, TILE, TILE);
+          }
           const [sx, sy] = this.autotileSrc(i, col, r, 1);
           ic.drawImage(sheetFor(r * i.cols + col), sx, sy, 64, 64, col * TILE, r * TILE, TILE, TILE);
+        }
+      }
+      // the pack's soft shadow sprite under every plateau blob
+      for (let r = 0; r < i.rows; r++) {
+        for (let col = 0; col < i.cols; col++) {
+          if (i.cells[r * i.cols + col] !== 2) continue;
+          ic.drawImage(this.a.img.shadow, col * TILE + TILE / 2 - 96, r * TILE + TILE / 2 - 96 + 10, 192, 192);
         }
       }
       for (let r = 0; r < i.rows; r++) {
@@ -224,11 +251,6 @@ export class Renderer {
             const wr = this.land(i, col + 1, r, 2) && !this.land(i, col + 1, r + 1, 2);
             const wx = wl && wr ? 6 : wr ? 5 : wl ? 7 : 8;
             ic.drawImage(sheet, wx * 64, 4 * 64, 64, 64, col * TILE, r * TILE, TILE, TILE);
-            // soft automatic shadow at the cliff base (one long strip, no tiling seams)
-            ic.fillStyle = 'rgba(20, 30, 20, .18)';
-            ic.fillRect(col * TILE - 2, r * TILE + TILE + 4, TILE + 4, 14);
-            ic.fillStyle = 'rgba(20, 30, 20, .10)';
-            ic.fillRect(col * TILE - 2, r * TILE + TILE + 18, TILE + 4, 10);
           }
           const [sx, sy] = this.autotileSrc(i, col, r, 2);
           ic.drawImage(sheet, 320 + sx, sy, 64, 64, col * TILE, r * TILE - RAISE, TILE, TILE);
@@ -240,7 +262,7 @@ export class Renderer {
         ic.save();
         ic.translate(scol * TILE + TILE / 2, 0);
         if (i.stairsFlip.has(sidx)) ic.scale(-1, 1);
-        ic.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, srow * TILE - TILE - 20, TILE, TILE * 2);
+        ic.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, srow * TILE - TILE * 2, TILE, TILE * 2);
         ic.restore();
       }
       this.islandCache = { canvas, version: i.version };

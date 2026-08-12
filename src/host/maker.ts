@@ -62,16 +62,32 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
 
   const toolsDiv = document.getElementById('tools')!;
   const terrainTools: [Tool, string][] = [['water', '🌊 water'], ['ground', '🟩 ground'], ['plateau', '⬛ plateau'], ['stair', '🪜 stairs ◀'], ['stairflip', '🪜 stairs ▶']];
-  for (const [id, label] of [...terrainTools, ...DECO_LIB.map((d) => [d, `🌳 ${d}`] as [Tool, string])]) {
-    const b = document.createElement('button');
-    b.textContent = label;
-    b.style.cssText = 'display:block;width:100%;margin:2px 0;padding:6px;border-radius:6px;border:1px solid #29B6F6;background:#131a3a;color:#eaf6ff;text-align:left';
-    b.addEventListener('click', () => {
-      tool = id;
-      [...toolsDiv.children].forEach((el) => ((el as HTMLElement).style.background = '#131a3a'));
-      b.style.background = '#29B6F6';
-    });
-    toolsDiv.appendChild(b);
+  const groups: [string, [Tool, string][]][] = [
+    ['TILES', terrainTools],
+    ['DECO', DECO_LIB.filter((d) => !d.startsWith('bld_')).map((d) => [d, `🌳 ${d}`] as [Tool, string])],
+    ['BUILDINGS', DECO_LIB.filter((d) => d.startsWith('bld_')).map((d) => [d, `🏰 ${d.slice(4)}`] as [Tool, string])],
+  ];
+  const allButtons: HTMLButtonElement[] = [];
+  for (const [title, tools] of groups) {
+    const det = document.createElement('details');
+    det.open = title === 'TILES';
+    const sum = document.createElement('summary');
+    sum.textContent = title;
+    sum.style.cssText = 'font-weight:800;margin:8px 0 4px;cursor:pointer;opacity:.8';
+    det.appendChild(sum);
+    for (const [id, label] of tools) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = 'display:block;width:100%;margin:2px 0;padding:6px;border-radius:6px;border:1px solid #29B6F6;background:#131a3a;color:#eaf6ff;text-align:left';
+      b.addEventListener('click', () => {
+        tool = id;
+        allButtons.forEach((el) => (el.style.background = '#131a3a'));
+        b.style.background = '#29B6F6';
+      });
+      allButtons.push(b);
+      det.appendChild(b);
+    }
+    toolsDiv.appendChild(det);
   }
 
   (document.getElementById('mskin') as HTMLSelectElement).addEventListener('change', (e) => {
@@ -212,6 +228,15 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
       for (let c = 0; c < GRID_COLS; c++) {
         if (!land(c, r)) continue;
         const sk = skins[r * GRID_COLS + c];
+        for (const [dc, dr] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+          const nc = c + dc;
+          const nr = r + dr;
+          if (nc < 0 || nr < 0 || nc >= GRID_COLS || nr >= GRID_ROWS) continue;
+          if (cells[nr * GRID_COLS + nc] >= 1 && skins[nr * GRID_COLS + nc] !== sk) {
+            ctx.drawImage(sheetFor(nr * GRID_COLS + nc), 64, 64, 64, 64, c * TILE, r * TILE, TILE, TILE);
+            break;
+          }
+        }
         const L = same(c - 1, r, 1, sk); const R = same(c + 1, r, 1, sk);
         const U = same(c, r - 1, 1, sk); const D = same(c, r + 1, 1, sk);
         const sx = (L && R ? 1 : R ? 0 : L ? 2 : 3) * 64;
@@ -223,16 +248,13 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
       for (let c = 0; c < GRID_COLS; c++) {
         const idx = r * GRID_COLS + c;
         if (cells[idx] !== 2) continue;
+        ctx.drawImage(assets.img.shadow, c * TILE + TILE / 2 - 96, r * TILE + TILE / 2 - 96 + 10, 192, 192);
         const sk = skins[idx];
         const L = same(c - 1, r, 2, sk); const R = same(c + 1, r, 2, sk);
         const U = same(c, r - 1, 2, sk); const D = same(c, r + 1, 2, sk);
         if (!land(c, r + 1, 2)) {
           const wx = L && R ? 6 : R ? 5 : L ? 7 : 8;
           ctx.drawImage(sheetFor(idx), wx * 64, 4 * 64, 64, 64, c * TILE, r * TILE, TILE, TILE);
-          ctx.fillStyle = 'rgba(20, 30, 20, .18)';
-          ctx.fillRect(c * TILE - 2, r * TILE + TILE + 4, TILE + 4, 14);
-          ctx.fillStyle = 'rgba(20, 30, 20, .10)';
-          ctx.fillRect(c * TILE - 2, r * TILE + TILE + 18, TILE + 4, 10);
         }
         const sx = 320 + (L && R ? 1 : R ? 0 : L ? 2 : 3) * 64;
         const sy = (U && D ? 1 : D ? 0 : U ? 2 : 3) * 64;
@@ -245,7 +267,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
       ctx.save();
       ctx.translate(sc2 * TILE + TILE / 2, 0);
       if (stairsFlip.has(sidx)) ctx.scale(-1, 1);
-      ctx.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, sr2 * TILE - TILE - 20, TILE, TILE * 2);
+      ctx.drawImage(sheetFor(sidx), 192, 256, 64, 128, -TILE / 2, sr2 * TILE - TILE * 2, TILE, TILE * 2);
       ctx.restore();
     }
     drawDeco(false);
