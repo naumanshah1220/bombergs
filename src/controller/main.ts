@@ -92,6 +92,15 @@ function waitFor(cond: () => boolean, timeoutMs: number): Promise<void> {
   });
 }
 
+function resetHeldInputs(): void {
+  // screen swaps can eat the pointerup: without this the last stick vector
+  // keeps streaming and the character "walks on its own" after respawn
+  moveVec = { x: 0, y: 0 };
+  gasHeld = false;
+  tapHeld = false;
+  tapQueued = false;
+}
+
 function handleHostMessage(msg: H2C): void {
   switch (msg.t) {
     case 'welcome':
@@ -101,6 +110,7 @@ function handleHostMessage(msg: H2C): void {
       else ui.showCalibrate(simMode);
       break;
     case 'phase':
+      resetHeldInputs();
       if (msg.phase === 'calibrate') ui.showCalibrate(simMode);
       // New stage: everyone returns to the sticks (revives the dead)
       if (msg.phase === 'play' && canDrive()) { carrying = false; ui.stopFuse(); ui.showPlay(playerName, myAbility, scheme); }
@@ -109,6 +119,7 @@ function handleHostMessage(msg: H2C): void {
       if (msg.phase === 'lobby') ui.showWaiting('Back in the lobby — next match soon!');
       break;
     case 'bomb':
+      if (msg.carrying !== carrying) resetHeldInputs();
       if (msg.carrying && !carrying) ui.showBomb(scheme);
       if (!msg.carrying && carrying && canDrive()) { ui.stopFuse(); ui.showPlay(playerName, myAbility, scheme); }
       carrying = msg.carrying;
@@ -123,6 +134,7 @@ function handleHostMessage(msg: H2C): void {
       ui.showDraft(msg.options);
       break;
     case 'status':
+      if (!msg.alive) resetHeldInputs();
       if (!msg.alive && msg.placement) ui.showDead(msg.placement);
       break;
   }

@@ -388,6 +388,11 @@ function startPractice(): void {
 }
 
 window.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 't' && mode !== 'lobby') {
+    const panel = document.getElementById('tune');
+    if (panel) panel.remove();
+    else mountTunePanel(true);
+  }
   if (e.key.toLowerCase() === 'l' && mode === 'practice') {
     mode = 'lobby';
     room?.broadcast({ t: 'phase', phase: 'lobby' });

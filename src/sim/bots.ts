@@ -6,7 +6,7 @@
 
 import { BOMB, carrierSlot } from './bomb';
 import { ARENA_H, ARENA_W } from './constants';
-import { cellAt, isGround, nearestStair } from './island';
+import { canStep, cellAt, isGround, isStairAt, nearestStair } from './island';
 import type { Penguin, World } from './world';
 
 export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; throttle?: number } {
@@ -27,19 +27,13 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; 
       if (d < bestD) { bestD = d; best = q; }
     }
     if (best) {
-      // different elevation? path via the nearest stairs instead of face-planting
-      if (cellAt(w.island, p.pos.x, p.pos.y) !== cellAt(w.island, best.pos.x, best.pos.y)) {
-        const stair = nearestStair(w.island, p.pos);
-        if (stair) {
-          const aimS = Math.atan2(stair.y - p.pos.y, stair.x - p.pos.x);
-          return { steer: turnToward(p.heading, aimS), tap: bestD < BOMB.PASS_RADIUS * 0.8 };
-        }
-      }
-      // slight lead on the target's velocity makes bots feel intentional
-      const aim = Math.atan2(
-        best.pos.y + best.vel.y * 0.25 - p.pos.y,
-        best.pos.x + best.vel.x * 0.25 - p.pos.x,
-      );
+      const aimPt = navPoint(w, p, best.pos);
+      const aim = aimPt
+        ? Math.atan2(aimPt.y - p.pos.y, aimPt.x - p.pos.x)
+        : Math.atan2(
+            best.pos.y + best.vel.y * 0.25 - p.pos.y,
+            best.pos.x + best.vel.x * 0.25 - p.pos.x,
+          );
       return { steer: turnToward(p.heading, aim), tap: bestD < BOMB.PASS_RADIUS * 0.8 };
     }
     return { steer: wander(w, p), tap: false };
@@ -95,20 +89,43 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; 
   return { steer: wander(w, p), tap: false };
 }
 
-/** Hard override when the ice ahead runs out; undefined when safe. */
+/**
+ * Where to head when the target may be on a different level: straight at it
+ * when levels match or we're already on a staircase; otherwise via stairs.
+ */
+function navPoint(w: World, p: Penguin, target: { x: number; y: number }): { x: number; y: number } | undefined {
+  const myCell = cellAt(w.island, p.pos.x, p.pos.y);
+  const targetCell = cellAt(w.island, target.x, target.y);
+  if (myCell === targetCell || isStairAt(w.island, p.pos.x, p.pos.y)) return undefined;
+  return nearestStair(w.island, p.pos);
+}
+
+/** Hard override when the path ahead is water or a cliff; undefined when safe. */
 function edgeAvoid(w: World, p: Penguin): number | undefined {
-  const lookAhead = 110;
-  const ahead = {
-    x: p.pos.x + Math.cos(p.heading) * lookAhead,
-    y: p.pos.y + Math.sin(p.heading) * lookAhead,
-  };
-  const mid = {
-    x: p.pos.x + Math.cos(p.heading) * lookAhead * 0.5,
-    y: p.pos.y + Math.sin(p.heading) * lookAhead * 0.5,
-  };
-  if (isGround(w.island, ahead) && isGround(w.island, mid)) return undefined;
-  const toCenter = Math.atan2(ARENA_H / 2 - p.pos.y, ARENA_W / 2 - p.pos.x);
-  return turnToward(p.heading, toCenter);
+  const speed = Math.hypot(p.vel.x, p.vel.y);
+  const lookAhead = 70 + speed * 0.45;
+  const probe = (ang: number, dist: number) => ({
+    x: p.pos.x + Math.cos(ang) * dist,
+    y: p.pos.y + Math.sin(ang) * dist,
+  });
+  const aheadWater = !isGround(w.island, probe(p.heading, lookAhead))
+    || !isGround(w.island, probe(p.heading, lookAhead * 0.5));
+  if (aheadWater) {
+    // pick the side with more ice under it
+    const leftOk = isGround(w.island, probe(p.heading - 0.7, lookAhead));
+    const rightOk = isGround(w.island, probe(p.heading + 0.7, lookAhead));
+    if (leftOk && !rightOk) return -1;
+    if (rightOk && !leftOk) return 1;
+    const toCenter = Math.atan2(ARENA_H / 2 - p.pos.y, ARENA_W / 2 - p.pos.x);
+    return turnToward(p.heading, toCenter);
+  }
+  // cliff face dead ahead? veer toward the stairs instead of grinding on it
+  if (!canStep(w.island, p.pos, probe(p.heading, 40))) {
+    const stair = nearestStair(w.island, p.pos);
+    const goal = stair ?? { x: ARENA_W / 2, y: ARENA_H / 2 };
+    return turnToward(p.heading, Math.atan2(goal.y - p.pos.y, goal.x - p.pos.x));
+  }
+  return undefined;
 }
 
 function wander(w: World, p: Penguin): number {

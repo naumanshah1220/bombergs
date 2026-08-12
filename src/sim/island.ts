@@ -113,11 +113,19 @@ export function generateIsland(cols: number, rows: number, rand: () => number = 
       }
     }
     if (placed) {
-      // stairs are plateau EDGE cells: the staircase replaces that cell's
-      // cliff wall, connecting its top to the ground below
-      const sc = pc + Math.floor(rand() * pw);
-      const sIdx = cellIndex(i, sc, pr + ph - 1);
-      if (cells[sIdx] === 2 && cells[cellIndex(i, sc, pr + ph)] === 1) i.stairs.add(sIdx);
+      // stairs sit on the LEFT or RIGHT edge of the plateau, facing outward
+      // (never the top or bottom edge), with ground beside them
+      const sr = pr + Math.floor(rand() * ph);
+      const leftIdx = cellIndex(i, pc, sr);
+      const rightIdx = cellIndex(i, pc + pw - 1, sr);
+      if (rand() < 0.5 && cells[leftIdx] === 2 && cells[cellIndex(i, pc - 1, sr)] === 1) {
+        i.stairs.add(leftIdx); // faces left, no flip
+      } else if (cells[rightIdx] === 2 && cells[cellIndex(i, pc + pw, sr)] === 1) {
+        i.stairs.add(rightIdx);
+        i.stairsFlip.add(rightIdx); // mirrored, faces right
+      } else if (cells[leftIdx] === 2 && cells[cellIndex(i, pc - 1, sr)] === 1) {
+        i.stairs.add(leftIdx);
+      }
     }
   }
   return i;
@@ -139,6 +147,9 @@ export type LevelData = {
 };
 
 export function islandFromLevel(level: LevelData): Island {
+  // legacy saves marked ground cells as stairs; in the current model a stair
+  // is a plateau-edge cell — drop anything else or it opens invisible passages
+  const validStairs = level.stairs.filter((idx) => level.cells[idx] === 2);
   return {
     cols: level.cols,
     rows: level.rows,
@@ -147,8 +158,8 @@ export function islandFromLevel(level: LevelData): Island {
     topSkins: level.topSkins
       ? [...level.topSkins]
       : level.skins ? [...level.skins] : new Array(level.cols * level.rows).fill(level.skin ?? 1),
-    stairs: new Set(level.stairs),
-    stairsFlip: new Set(level.stairsFlip ?? []),
+    stairs: new Set(validStairs),
+    stairsFlip: new Set((level.stairsFlip ?? []).filter((idx) => level.cells[idx] === 2)),
     version: 0,
   };
 }
