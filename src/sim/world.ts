@@ -9,7 +9,7 @@ import {
   MAX_PICKUPS, PICKUP_INTERVAL_MS, PICKUP_RADIUS, START_LIVES, TUNE,
 } from './constants';
 import {
-  cellAt, cellCenter, generateIsland, groundCells, isGround,
+  canStep, cellAt, cellCenter, generateIsland, groundCells, isGround,
   type Island, type Vec2,
 } from './island';
 import type { AbilityId } from '../shared/protocol';
@@ -90,7 +90,7 @@ export function makeWorld(
   // spawn spread: ground cells sorted by angle around the center, sampled evenly
   const cx = (GRID_COLS * 64) / 2;
   const cy = (GRID_ROWS * 64) / 2;
-  const ring = groundCells(island)
+  const ring = groundCells(island, 1)
     .map(({ c, r }) => cellCenter(island, c, r))
     .filter((p) => Math.hypot(p.x - cx, p.y - cy) > 150)
     .sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
@@ -138,18 +138,17 @@ export function loseLife(w: World, p: Penguin, at: Vec2): WorldEvent[] {
 
 /** A random safe ground cell to reappear on. */
 export function respawnPoint(w: World, rand: () => number = Math.random): Vec2 {
-  const cells = groundCells(w.island);
+  const cells = groundCells(w.island, 1);
   if (!cells.length) return { x: (GRID_COLS * 64) / 2, y: (GRID_ROWS * 64) / 2 };
   const pick = cells[Math.floor(rand() * cells.length)];
   return cellCenter(w.island, pick.c, pick.r);
 }
 
-/** Cells you cannot MOVE into: ledges always; water too when it's a wall. */
-function blockedAt(w: World, x: number, y: number): boolean {
-  const cell = cellAt(w.island, x, y);
-  if (cell === 2) return true;
-  if (cell === 0 && !w.rules.edgeDeath) return true;
-  return false;
+/** Movement gate: cliff edges block; stairs connect levels; water is
+ * enterable in matches (falling) but a wall in practice bumper mode. */
+function blockedStep(w: World, from: { x: number; y: number }, x: number, y: number): boolean {
+  if (cellAt(w.island, x, y) === 0 && !w.rules.edgeDeath) return true;
+  return !canStep(w.island, from, { x, y });
 }
 
 export function step(w: World, dtMs: number): WorldEvent[] {
@@ -193,12 +192,12 @@ export function step(w: World, dtMs: number): WorldEvent[] {
     p.vel.x += (thrust.x - p.vel.x) * k;
     p.vel.y += (thrust.y - p.vel.y) * k;
 
-    // axis-separated slide against ledges (and water-walls in practice)
+    // axis-separated slide against cliff edges (stairs pass, water enters)
     const nx = p.pos.x + p.vel.x * dt;
-    if (blockedAt(w, nx, p.pos.y)) p.vel.x = 0;
+    if (blockedStep(w, p.pos, nx, p.pos.y)) p.vel.x = 0;
     else p.pos.x = nx;
     const ny = p.pos.y + p.vel.y * dt;
-    if (blockedAt(w, p.pos.x, ny)) p.vel.y = 0;
+    if (blockedStep(w, p.pos, p.pos.x, ny)) p.vel.y = 0;
     else p.pos.y = ny;
   }
 

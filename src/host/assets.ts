@@ -1,53 +1,49 @@
-// Sprite loading + per-player recoloring. Art: "Tiny Swords" (old version,
-// CC0) by Pixel Frog — Pawn workers, dynamite, terrain, props, UI.
-//
-// The pack ships pawns in 4 team colors; slots 4-7 get hue-rotated copies.
+// v2 sprite loading — new-pack terrain/FX/props + the user's custom
+// bomb-carrying/throwing Pawn sheets. All 8 player slots are generated from
+// the Yellow base sheets by dyeing the two tunic palette entries to the
+// bright PLAYER_COLORS — maximum tell-apart-ability at couch distance.
 
-const FILES = {
-  dynamite: 'dynamite.png',            // 6 frames, 64px
-  explosions: 'explosions.png',        // 9 frames, 192px
-  tilemap: 'tilemap_flat.png',         // 64px tiles: grass 4x4 blob at (0,0)
-  elevation: 'tilemap_elevation.png',  // 64px tiles: plateau + cliff walls
-  shadow: 'shadow.png',                // 192px unit shadow
-  water: 'water.png',                  // 64px tile
-  foam: 'foam.png',                    // 8 frames, 192px
-  rocks1: 'rocks1.png',                // 8 frames, 128px
-  rocks2: 'rocks2.png',
-  sheep: 'sheep.png',                  // 6 frames, 128px (bouncing)
-  deco1: 'deco1.png',
-  deco9: 'deco9.png',
-  deco10: 'deco10.png',
-  carved: 'carved.png',                // 64px carved shield (portrait bg)
-  ribbon: 'ribbon.png',                // 192x64 name ribbon
+import { PLAYER_COLORS } from '../shared/protocol';
+
+const V2 = {
+  tilemap1: 'v2/tilemap1.png',     // 9x6 64px: flat block (0,0), elev block (5,0), walls row 4, stairs col 3 rows 4-5
+  tilemap2: 'v2/tilemap2.png',     // same layout, elevation color
+  water: 'v2/water.png',
+  foam: 'v2/foam.png',             // 16 frames, 192
+  shadow: 'v2/shadow.png',
+  explosion: 'v2/explosion.png',   // 8 frames, 192
+  splash: 'v2/splash.png',         // 9 frames, 192
+  bombroll: 'v2/bombroll.png',     // 11 frames, 100 (custom)
+  dust: 'v2/dust.png',             // 8 frames, 64
+  cloud1: 'v2/cloud1.png', cloud2: 'v2/cloud2.png', cloud3: 'v2/cloud3.png', cloud4: 'v2/cloud4.png',
+  duck: 'v2/duck.png',             // 3 frames, 32
+  waterrock1: 'v2/waterrock1.png', // 16 frames, 64
+  waterrock2: 'v2/waterrock2.png',
+  bush1: 'v2/bush1.png', bush2: 'v2/bush2.png', bush3: 'v2/bush3.png', bush4: 'v2/bush4.png',
+  rock1: 'v2/rock1.png', rock2: 'v2/rock2.png', rock3: 'v2/rock3.png', rock4: 'v2/rock4.png',
+  sheepIdle: 'v2/sheep_idle.png',  // 6 frames, 128
+  sheepMove: 'v2/sheep_move.png',  // 4 frames, 128
+  tree1: 'v2/tree1.png', tree2: 'v2/tree2.png', // 6 frames, 256
+  carved: 'carved.png',
+  ribbon: 'ribbon.png',
 } as const;
 
-export type SheetName = keyof typeof FILES;
+export type SheetName = keyof typeof V2;
 
-/** Per-slot pawn source: base team sheet + optional hue rotation. */
-const PAWN_VARIANTS: { src: string; hue: number }[] = [
-  { src: 'pawn_red.png', hue: 0 },      // 0 red
-  { src: 'pawn_yellow.png', hue: 0 },   // 1 yellow
-  { src: 'pawn_red.png', hue: 120 },    // 2 green-ish
-  { src: 'pawn_blue.png', hue: 0 },     // 3 blue
-  { src: 'pawn_purple.png', hue: 0 },   // 4 purple
-  { src: 'pawn_red.png', hue: 30 },     // 5 orange
-  { src: 'pawn_purple.png', hue: 45 },  // 6 pink
-  { src: 'pawn_blue.png', hue: 45 },    // 7 teal
-];
-
-/** Pawn sheet: 6 rows x 6 frames of 192px. */
-export const PAWN = {
-  FW: 192, FH: 192, FRAMES: 6,
-  IDLE: 0, RUN: 1, BUILD: 2, CARRY_IDLE: 3, CARRY_RUN: 4,
+/** Pawn animation sheets (192px frames unless noted). */
+export type PawnSheets = {
+  idle: CanvasImageSource;      // 8 frames
+  run: CanvasImageSource;       // 6 frames
+  bombIdle: CanvasImageSource;  // 8 frames (custom)
+  bombRun: CanvasImageSource;   // 6 frames (custom)
+  throw: CanvasImageSource;     // 3 frames of ~199x200 (custom)
 };
-
-export type TileRef = { sx: number; sy: number };
 
 export type Assets = {
   img: Record<SheetName, HTMLImageElement>;
-  pawns: CanvasImageSource[]; // index = slot
-  wallTile: TileRef;          // cliff face from the elevation sheet
-  plateauTile: TileRef;       // grassy top from the elevation sheet
+  pawns: PawnSheets[]; // index = slot
+  throwFrameW: number;
+  throwFrameH: number;
 };
 
 function load(src: string): Promise<HTMLImageElement> {
@@ -59,66 +55,93 @@ function load(src: string): Promise<HTMLImageElement> {
   });
 }
 
-/**
- * The elevation sheet's exact layout varies between pack versions, so probe
- * it: the cliff WALL is the fully-opaque cell with the least green dominance,
- * the PLATEAU top is the most-green fully-opaque cell.
- */
-function probeElevation(img: HTMLImageElement): { wall: TileRef; plateau: TileRef } {
-  const c = document.createElement('canvas');
-  c.width = img.width;
-  c.height = img.height;
-  const ctx = c.getContext('2d')!;
-  ctx.drawImage(img, 0, 0);
-  let wall: TileRef = { sx: 0, sy: 0 };
-  let plateau: TileRef = { sx: 0, sy: 0 };
-  let minGreen = Infinity;
-  let maxGreen = -Infinity;
-  for (let ry = 0; ry < img.height; ry += 64) {
-    for (let rx = 0; rx < img.width; rx += 64) {
-      const d = ctx.getImageData(rx, ry, 64, 64).data;
-      let opaque = 0;
-      let rSum = 0;
-      let gSum = 0;
-      let bSum = 0;
-      for (let k = 0; k < d.length; k += 4) {
-        if (d[k + 3] > 128) {
-          opaque++;
-          rSum += d[k];
-          gSum += d[k + 1];
-          bSum += d[k + 2];
-        }
-      }
-      if (opaque < 64 * 64 * 0.95) continue;
-      const dominance = gSum / Math.max(rSum + bSum, 1);
-      if (dominance < minGreen) { minGreen = dominance; wall = { sx: rx, sy: ry }; }
-      if (dominance > maxGreen) { maxGreen = dominance; plateau = { sx: rx, sy: ry }; }
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Find the (few) palette entries that differ between two aligned sheets. */
+function diffKeys(a: HTMLImageElement, b: HTMLImageElement): [number, number, number][] {
+  const ca = document.createElement('canvas');
+  ca.width = a.width; ca.height = a.height;
+  const xa = ca.getContext('2d')!;
+  xa.drawImage(a, 0, 0);
+  const da = xa.getImageData(0, 0, a.width, a.height).data;
+  const cb = document.createElement('canvas');
+  cb.width = b.width; cb.height = b.height;
+  const xb = cb.getContext('2d')!;
+  xb.drawImage(b, 0, 0);
+  const db = xb.getImageData(0, 0, b.width, b.height).data;
+  const keys = new Map<string, [number, number, number]>();
+  const n = Math.min(da.length, db.length);
+  for (let k = 0; k < n; k += 4) {
+    if (da[k + 3] > 10 && db[k + 3] > 10 &&
+        (da[k] !== db[k] || da[k + 1] !== db[k + 1] || da[k + 2] !== db[k + 2])) {
+      keys.set(`${da[k]},${da[k + 1]},${da[k + 2]}`, [da[k], da[k + 1], da[k + 2]]);
     }
   }
-  return { wall, plateau };
+  return [...keys.values()];
+}
+
+/** Recolor `sheet`, mapping tunic keys to a player color (+darker shade). */
+function dye(sheet: HTMLImageElement, keys: [number, number, number][], color: string): HTMLCanvasElement {
+  const [pr, pg, pb] = hexToRgb(color);
+  // brighter key -> player color; darker key -> 62% shade
+  const sorted = [...keys].sort((x, y) => (y[0] + y[1] + y[2]) - (x[0] + x[1] + x[2]));
+  const canvas = document.createElement('canvas');
+  canvas.width = sheet.width;
+  canvas.height = sheet.height;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(sheet, 0, 0);
+  const im = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = im.data;
+  for (let k = 0; k < d.length; k += 4) {
+    if (d[k + 3] <= 10) continue;
+    for (let s = 0; s < sorted.length; s++) {
+      const [kr, kg, kb] = sorted[s];
+      if (d[k] === kr && d[k + 1] === kg && d[k + 2] === kb) {
+        const f = s === 0 ? 1 : 0.62;
+        d[k] = Math.round(pr * f);
+        d[k + 1] = Math.round(pg * f);
+        d[k + 2] = Math.round(pb * f);
+        break;
+      }
+    }
+  }
+  ctx.putImageData(im, 0, 0);
+  return canvas;
 }
 
 export async function loadAssets(): Promise<Assets> {
-  const names = Object.keys(FILES) as SheetName[];
-  const imgs = await Promise.all(names.map((n) => load(FILES[n])));
+  const names = Object.keys(V2) as SheetName[];
+  const imgs = await Promise.all(names.map((n) => load(V2[n])));
   const img = Object.fromEntries(names.map((n, i) => [n, imgs[i]])) as Assets['img'];
 
-  const bases = new Map<string, HTMLImageElement>();
-  for (const v of PAWN_VARIANTS) {
-    if (!bases.has(v.src)) bases.set(v.src, await load(v.src));
-  }
-  const pawns: CanvasImageSource[] = PAWN_VARIANTS.map((v) => {
-    const base = bases.get(v.src)!;
-    if (v.hue === 0) return base;
-    const c = document.createElement('canvas');
-    c.width = base.width;
-    c.height = base.height;
-    const ctx = c.getContext('2d')!;
-    ctx.filter = `hue-rotate(${v.hue}deg)`;
-    ctx.drawImage(base, 0, 0);
-    return c;
-  });
+  // base sheets (yellow) + a red pack sheet to learn the tunic palette keys
+  const [yIdle, yRun, yBombIdle, yBombRun, yThrow, rIdle] = await Promise.all([
+    load('v2/pawn_yellow_idle.png'),
+    load('v2/pawn_yellow_run.png'),
+    load('v2/pawn_yellow_bombidle.png'),
+    load('v2/pawn_yellow_bombrun.png'),
+    load('v2/pawn_yellow_throw.png'),
+    load('v2/pawn_red_idle.png'),
+  ]);
+  const keys = diffKeys(yIdle, rIdle);
 
-  const { wall, plateau } = probeElevation(img.elevation);
-  return { img, pawns, wallTile: wall, plateauTile: plateau };
+  const pawns: PawnSheets[] = PLAYER_COLORS.map((color) => ({
+    idle: dye(yIdle, keys, color),
+    run: dye(yRun, keys, color),
+    bombIdle: dye(yBombIdle, keys, color),
+    bombRun: dye(yBombRun, keys, color),
+    throw: dye(yThrow, keys, color),
+  }));
+
+  return {
+    img,
+    pawns,
+    throwFrameW: Math.floor(yThrow.width / 3),
+    throwFrameH: yThrow.height,
+  };
 }
+
+export const PAWN = { FW: 192, FH: 192, IDLE_F: 8, RUN_F: 6 };

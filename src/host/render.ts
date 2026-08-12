@@ -1,12 +1,10 @@
-// Sprite renderer — Tiny Swords tiles on the grid island. ¾ top-down: the
-// world is seen from above, pawns are drawn side-on and flip with their
-// walking direction (the Bomberman convention).
+// v2 sprite renderer — new-pack terrain with real elevation, custom Pawn
+// bomb animations, clouds overhead. ¾ top-down, Bomberman-style flipping.
 //
-// Layers, back to front: water tile pattern → bobbing rocks → foam under
-// land edges → autotiled island (cached, rebuilt on damage) → elevated
-// ledges (cliff wall + plateau top) → deco → splash rings → y-sorted actors
-// (pawns, sheep, pickups, tumbling blast victims) → bomb layer → explosions
-// → screen-space HUD portrait cards → shake/flash.
+// Layers: water → water rocks/ducks → foam → island (level-1 autotile, then
+// raised level-2 plateau with cliff walls + stairs; cached by version) →
+// deco → splashes → y-sorted actors (pawns with color rings, sheep, pickups,
+// tumblers) → bomb layer → explosions → clouds → HUD cards.
 
 import { BOMB, fuseFrac } from '../sim/bomb';
 import { ARENA_H, ARENA_W, INVULN_MS, MAX_LIVES } from '../sim/constants';
@@ -14,30 +12,29 @@ import { TILE, cellCenter, cellIndex, groundCells, isGround, type Island } from 
 import type { Penguin, Vec2, World, WorldEvent } from '../sim/world';
 import { PAWN, type Assets } from './assets';
 
-type Splash = { x: number; y: number; age: number };
-type Spray = { x: number; y: number; vx: number; vy: number; age: number; color?: string };
-type Shockwave = { x: number; y: number; age: number };
-type Boom = { x: number; y: number; age: number };
+type Fx = { x: number; y: number; age: number };
 type Tumble = { slot: number; x: number; y: number; vx: number; vy: number; age: number };
 
-const UNIT = 176; // draw size of a 192px unit frame (slightly tightened)
+const UNIT = 176;
 
 export class Renderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private a: Assets;
   private t = 0;
-  private splashes: Splash[] = [];
-  private spray: Spray[] = [];
-  private shockwaves: Shockwave[] = [];
-  private booms: Boom[] = [];
+  private splashFx: Fx[] = [];
+  private booms: Fx[] = [];
+  private shockwaves: Fx[] = [];
+  private spray: (Fx & { vx: number; vy: number; color?: string })[] = [];
   private tumbles: Tumble[] = [];
   private throwUntil = new Map<number, number>();
   private facing = new Map<number, number>();
   private shake = 0;
   private flash = 0;
   private islandCache?: { canvas: HTMLCanvasElement; version: number };
-  private decoSpots: { x: number; y: number; img: 'deco1' | 'deco9' | 'deco10' }[] = [];
+  private deco: { x: number; y: number; img: 'bush1' | 'bush2' | 'bush3' | 'bush4' | 'rock1' | 'rock2' | 'rock3' | 'rock4' }[] = [];
+  private clouds: { x: number; y: number; img: 'cloud1' | 'cloud2' | 'cloud3' | 'cloud4'; v: number }[] = [];
+  private ducks: { x: number; y: number; v: number }[] = [];
   private sheep = { x: 0, y: 0, timer: 0, vx: 0, vy: 0 };
   private waterPattern?: CanvasPattern;
   private inited = false;
@@ -52,22 +49,34 @@ export class Renderer {
     if (this.inited) return;
     this.inited = true;
     this.waterPattern = this.ctx.createPattern(this.a.img.water, 'repeat')!;
-    const cells = groundCells(island);
-    const rng = mulberry(4242);
-    const decoNames = ['deco1', 'deco9', 'deco10'] as const;
-    for (let i = 0; i < 10 && cells.length; i++) {
+    const cells = groundCells(island, 1);
+    const rng = mulberry(777);
+    const decoNames = ['bush1', 'bush2', 'bush3', 'bush4', 'rock1', 'rock2', 'rock3', 'rock4'] as const;
+    for (let i = 0; i < 12 && cells.length; i++) {
       const pick = cells[Math.floor(rng() * cells.length)];
       const p = cellCenter(island, pick.c, pick.r);
-      this.decoSpots.push({ x: p.x, y: p.y, img: decoNames[i % 3] });
+      this.deco.push({ x: p.x, y: p.y, img: decoNames[i % decoNames.length] });
     }
-    const s = cells.length ? cellCenter(island, cells[0].c, cells[0].r) : { x: ARENA_W / 2, y: ARENA_H / 2 };
+    for (let i = 0; i < 4; i++) {
+      this.clouds.push({
+        x: rng() * ARENA_W,
+        y: 60 + rng() * (ARENA_H - 200),
+        img: (['cloud1', 'cloud2', 'cloud3', 'cloud4'] as const)[i],
+        v: 8 + rng() * 10,
+      });
+    }
+    this.ducks = [
+      { x: 100, y: 80, v: 14 },
+      { x: ARENA_W - 140, y: ARENA_H - 70, v: -11 },
+    ];
+    const s = cells.length ? cellCenter(island, cells[Math.floor(cells.length / 2)].c, cells[Math.floor(cells.length / 2)].r) : { x: ARENA_W / 2, y: ARENA_H / 2 };
     this.sheep = { x: s.x, y: s.y, timer: 0, vx: 0, vy: 0 };
   }
 
   addEvents(events: WorldEvent[], world: World): void {
     for (const e of events) {
-      if (e.kind === 'splash') this.splashes.push({ x: e.at.x, y: e.at.y, age: 0 });
-      if (e.kind === 'throw') this.throwUntil.set(e.slot, this.t + 0.5);
+      if (e.kind === 'splash') this.splashFx.push({ x: e.at.x, y: e.at.y, age: 0 });
+      if (e.kind === 'throw') this.throwUntil.set(e.slot, this.t + 0.4);
       if (e.kind === 'explode') {
         this.shake = 1;
         this.flash = 0.3;
@@ -78,8 +87,7 @@ export class Renderer {
         const ang = Math.random() * Math.PI * 2;
         this.tumbles.push({
           slot: e.slot, x: e.at.x, y: e.at.y,
-          vx: Math.cos(ang) * 180, vy: Math.sin(ang) * 180 - 220,
-          age: 0,
+          vx: Math.cos(ang) * 170, vy: Math.sin(ang) * 170 - 230, age: 0,
         });
       }
       if (e.kind === 'blink') {
@@ -117,16 +125,17 @@ export class Renderer {
       c.translate((Math.random() - 0.5) * amp, (Math.random() - 0.5) * amp);
     }
 
-    this.waterLayer(c);
+    this.waterLayer(c, dtMs);
     this.foamLayer(c, w.island);
     this.islandLayer(c, w.island);
     this.decoLayer(c);
-    this.updateSplashes(c, dtMs);
     this.actorsLayer(c, w, dtMs);
     this.bombLayer(c, w);
     this.updateBooms(c, dtMs);
+    this.updateSplashes(c, dtMs);
     this.updateShockwaves(c, dtMs);
     this.updateSpray(c, dtMs);
+    this.cloudLayer(c, dtMs);
 
     if (this.flash > 0) {
       this.flash = Math.max(0, this.flash - dtMs / 1000);
@@ -134,33 +143,38 @@ export class Renderer {
       c.fillRect(0, 0, ARENA_W, ARENA_H);
     }
     c.restore();
-
-    this.hudCards(c, w, scale);
+    this.hudCards(c, w);
   }
 
-  private waterLayer(c: CanvasRenderingContext2D): void {
+  private waterLayer(c: CanvasRenderingContext2D, dtMs: number): void {
     if (this.waterPattern) {
       c.fillStyle = this.waterPattern;
       c.fillRect(0, 0, ARENA_W, ARENA_H);
     }
-    const rockFrame = Math.floor(this.t * 7) % 8;
-    for (const [img, x, y] of [
-      [this.a.img.rocks1, 40, 40],
-      [this.a.img.rocks2, ARENA_W - 150, 60],
-      [this.a.img.rocks1, ARENA_W - 130, ARENA_H - 120],
-      [this.a.img.rocks2, 30, ARENA_H - 110],
-    ] as const) {
-      c.drawImage(img, rockFrame * 128, 0, 128, 128, x, y, 96, 96);
+    const rf = Math.floor(this.t * 8) % 16;
+    c.drawImage(this.a.img.waterrock1, rf * 64, 0, 64, 64, 60, 130, 64, 64);
+    c.drawImage(this.a.img.waterrock2, rf * 64, 0, 64, 64, ARENA_W - 120, 90, 64, 64);
+    c.drawImage(this.a.img.waterrock1, rf * 64, 0, 64, 64, ARENA_W - 90, ARENA_H - 150, 64, 64);
+    const df = Math.floor(this.t * 5) % 3;
+    for (const d of this.ducks) {
+      d.x += d.v * dtMs / 1000;
+      if (d.x > ARENA_W + 40) d.x = -40;
+      if (d.x < -40) d.x = ARENA_W + 40;
+      c.save();
+      c.translate(d.x, d.y + Math.sin(this.t * 2 + d.y) * 3);
+      if (d.v < 0) c.scale(-1, 1);
+      c.drawImage(this.a.img.duck, df * 32, 0, 32, 32, -24, -24, 48, 48);
+      c.restore();
     }
   }
 
-  private land(i: Island, cIdx: number, r: number): boolean {
-    if (cIdx < 0 || r < 0 || cIdx >= i.cols || r >= i.rows) return false;
-    return i.cells[cellIndex(i, cIdx, r)] !== 0;
+  private land(i: Island, c: number, r: number, min = 1): boolean {
+    if (c < 0 || r < 0 || c >= i.cols || r >= i.rows) return false;
+    return i.cells[cellIndex(i, c, r)] >= min;
   }
 
   private foamLayer(c: CanvasRenderingContext2D, i: Island): void {
-    const frame = Math.floor(this.t * 9) % 8;
+    const frame = Math.floor(this.t * 10) % 16;
     for (let r = 0; r < i.rows; r++) {
       for (let col = 0; col < i.cols; col++) {
         if (!this.land(i, col, r)) continue;
@@ -171,6 +185,16 @@ export class Renderer {
     }
   }
 
+  private autotileSrc(i: Island, col: number, r: number, min: 1 | 2): [number, number] {
+    const L = this.land(i, col - 1, r, min);
+    const R = this.land(i, col + 1, r, min);
+    const U = this.land(i, col, r - 1, min);
+    const D = this.land(i, col, r + 1, min);
+    const sc = L && R ? 1 : R ? 0 : L ? 2 : 3;
+    const sr = U && D ? 1 : D ? 0 : U ? 2 : 3;
+    return [sc * 64, sr * 64];
+  }
+
   private islandLayer(c: CanvasRenderingContext2D, i: Island): void {
     if (!this.islandCache || this.islandCache.version !== i.version) {
       const canvas = this.islandCache?.canvas ?? document.createElement('canvas');
@@ -179,27 +203,32 @@ export class Renderer {
       const ic = canvas.getContext('2d')!;
       ic.imageSmoothingEnabled = false;
       ic.clearRect(0, 0, ARENA_W, ARENA_H);
-      // base ground: 4x4 grass blob autotile (3x3 blob + strip pieces)
+      const RAISE = 20;
       for (let r = 0; r < i.rows; r++) {
         for (let col = 0; col < i.cols; col++) {
           if (!this.land(i, col, r)) continue;
-          const L = this.land(i, col - 1, r);
-          const R = this.land(i, col + 1, r);
-          const U = this.land(i, col, r - 1);
-          const D = this.land(i, col, r + 1);
-          const sc = L && R ? 1 : R ? 0 : L ? 2 : 3;
-          const sr = U && D ? 1 : D ? 0 : U ? 2 : 3;
-          ic.drawImage(this.a.img.tilemap, sc * 64, sr * 64, 64, 64, col * TILE, r * TILE, TILE, TILE);
+          const [sx, sy] = this.autotileSrc(i, col, r, 1);
+          ic.drawImage(this.a.img.tilemap1, sx, sy, 64, 64, col * TILE, r * TILE, TILE, TILE);
         }
       }
-      // elevated ledges: cliff wall in the cell, grassy plateau raised above
       for (let r = 0; r < i.rows; r++) {
         for (let col = 0; col < i.cols; col++) {
-          if (i.cells[cellIndex(i, col, r)] !== 2) continue;
-          const w = this.a.wallTile;
-          const p = this.a.plateauTile;
-          ic.drawImage(this.a.img.elevation, w.sx, w.sy, 64, 64, col * TILE, r * TILE, TILE, TILE);
-          ic.drawImage(this.a.img.elevation, p.sx, p.sy, 64, 64, col * TILE, r * TILE - 22, TILE, TILE);
+          if (!this.land(i, col, r, 2)) continue;
+          const idx = cellIndex(i, col, r);
+          const southLower = !this.land(i, col, r + 1, 2);
+          if (southLower) {
+            // cliff wall filling the seam below the raised top
+            const wl = this.land(i, col - 1, r, 2) && !this.land(i, col - 1, r + 1, 2);
+            const wr = this.land(i, col + 1, r, 2) && !this.land(i, col + 1, r + 1, 2);
+            const wx = wl && wr ? 6 : wr ? 5 : wl ? 7 : 8;
+            ic.drawImage(this.a.img.tilemap1, wx * 64, 4 * 64, 64, 64, col * TILE, r * TILE + TILE - RAISE - 20, TILE, TILE);
+          }
+          if (i.stairs.has(idx)) {
+            ic.drawImage(this.a.img.tilemap1, 3 * 64, 5 * 64, 64, 64, col * TILE, r * TILE - 6, TILE, TILE);
+          } else {
+            const [sx, sy] = this.autotileSrc(i, col, r, 2);
+            ic.drawImage(this.a.img.tilemap2, 320 + sx, sy, 64, 64, col * TILE, r * TILE - RAISE, TILE, TILE);
+          }
         }
       }
       this.islandCache = { canvas, version: i.version };
@@ -208,8 +237,11 @@ export class Renderer {
   }
 
   private decoLayer(c: CanvasRenderingContext2D): void {
-    for (const d of this.decoSpots) {
-      c.drawImage(this.a.img[d.img], d.x - 24, d.y - 32, 48, 48);
+    const bf = Math.floor(this.t * 7) % 8;
+    for (const d of this.deco) {
+      const img = this.a.img[d.img];
+      if (d.img.startsWith('bush')) c.drawImage(img, bf * 128, 0, 128, 128, d.x - 40, d.y - 52, 80, 80);
+      else c.drawImage(img, d.x - 24, d.y - 26, 48, 48);
     }
   }
 
@@ -222,7 +254,6 @@ export class Renderer {
       if (!p.alive) continue;
       actors.push({ y: p.pos.y, drawFn: () => this.pawn(c, p, p.slot === carrier) });
     }
-
     for (const pk of w.pickups) {
       const bob = Math.sin(this.t * 3 + pk.id) * 3;
       actors.push({
@@ -230,31 +261,26 @@ export class Renderer {
         drawFn: () => {
           c.save();
           c.translate(pk.pos.x, pk.pos.y + bob);
-          c.beginPath();
-          c.ellipse(0, 13 - bob, 14, 6, 0, 0, Math.PI * 2);
-          c.fillStyle = 'rgba(30, 60, 40, .3)';
-          c.fill();
           if (pk.kind === 'heart') this.heart(c, 0, 0, 12, '#ff4560');
           else this.crate(c);
           c.restore();
         },
       });
     }
-
     this.stepSheep(w, dtMs);
     actors.push({
       y: this.sheep.y,
       drawFn: () => {
         const moving = Math.hypot(this.sheep.vx, this.sheep.vy) > 6;
-        const frame = moving ? Math.floor(this.t * 10) % 6 : 0;
+        const frame = moving ? Math.floor(this.t * 8) % 4 : Math.floor(this.t * 6) % 6;
+        const sheet = moving ? this.a.img.sheepMove : this.a.img.sheepIdle;
         c.save();
         c.translate(this.sheep.x, this.sheep.y);
         if (this.sheep.vx < 0) c.scale(-1, 1);
-        c.drawImage(this.a.img.sheep, frame * 128, 0, 128, 128, -36, -50, 72, 72);
+        c.drawImage(sheet, frame * 128, 0, 128, 128, -56, -78, 112, 112);
         c.restore();
       },
     });
-
     for (const tb of [...this.tumbles]) {
       tb.age += dtMs / 1000;
       tb.x += tb.vx * dtMs / 1000;
@@ -267,55 +293,67 @@ export class Renderer {
       actors.push({
         y: tb.y + 4000,
         drawFn: () => {
+          const grow = 1 + Math.sin(Math.min(tb.age, 1) * Math.PI) * 0.9; // toward camera and back
           c.save();
           c.translate(tb.x, tb.y);
-          c.rotate(tb.age * 12);
+          c.rotate(tb.age * 11);
           c.globalAlpha = Math.min(1, 2.2 - tb.age * 2);
-          const sheet = this.a.pawns[tb.slot % this.a.pawns.length];
-          c.drawImage(sheet, 0, 0, PAWN.FW, PAWN.FH, -40, -40, 80, 80);
+          const size = 90 * grow;
+          c.drawImage(this.a.pawns[tb.slot % this.a.pawns.length].idle, 0, 0, PAWN.FW, PAWN.FH, -size / 2, -size / 2, size, size);
           c.restore();
           c.globalAlpha = 1;
         },
       });
     }
-
     actors.sort((x, z) => x.y - z.y);
     for (const a of actors) a.drawFn();
   }
 
   private pawn(c: CanvasRenderingContext2D, p: Penguin, carrying: boolean): void {
-    const sheet = this.a.pawns[p.slot % this.a.pawns.length];
+    const sheets = this.a.pawns[p.slot % this.a.pawns.length];
     const speed = Math.hypot(p.vel.x, p.vel.y);
     if (Math.abs(p.vel.x) > 10) this.facing.set(p.slot, Math.sign(p.vel.x));
     const face = this.facing.get(p.slot) ?? 1;
 
-    if (p.invulnMs > 0 && Math.floor((INVULN_MS - p.invulnMs) / 110) % 2 === 0) return;
+    // player identity: bold color ring on the ground, always visible
+    c.save();
+    c.beginPath();
+    c.ellipse(p.pos.x, p.pos.y + 8, 26, 12, 0, 0, Math.PI * 2);
+    c.fillStyle = `${p.color}2e`;
+    c.fill();
+    c.lineWidth = 4;
+    c.strokeStyle = p.color;
+    c.stroke();
+    c.restore();
 
-    let row: number;
-    let rate = 10;
-    const throwing = (this.throwUntil.get(p.slot) ?? 0) > this.t;
-    if (throwing) {
-      row = PAWN.BUILD; // big overhead swing reads as the throw
-      rate = 14;
-    } else if (carrying) {
-      row = speed > 20 ? PAWN.CARRY_RUN : PAWN.CARRY_IDLE;
-    } else {
-      row = speed > 20 ? PAWN.RUN : PAWN.IDLE;
-      rate = speed > 20 ? 12 : 8;
-    }
-    const frame = Math.floor(this.t * rate) % PAWN.FRAMES;
+    if (p.invulnMs > 0 && Math.floor((INVULN_MS - p.invulnMs) / 110) % 2 === 0) return;
 
     const sh = UNIT * 0.9;
     c.drawImage(this.a.img.shadow, p.pos.x - sh / 2, p.pos.y - sh / 2 + 6, sh, sh);
+
+    const throwing = (this.throwUntil.get(p.slot) ?? 0) > this.t;
     c.save();
     c.translate(p.pos.x, p.pos.y);
     if (face < 0) c.scale(-1, 1);
-    // frame characters stand around y≈130/192 → offset so feet meet pos
-    c.drawImage(sheet, frame * PAWN.FW, row * PAWN.FH, PAWN.FW, PAWN.FH, -UNIT / 2, -UNIT * 0.62, UNIT, UNIT);
+    if (throwing) {
+      const total = 0.4;
+      const remain = (this.throwUntil.get(p.slot) ?? 0) - this.t;
+      const frame = Math.min(2, Math.floor(((total - remain) / total) * 3));
+      const fw = this.a.throwFrameW;
+      const fh = this.a.throwFrameH;
+      const dw = UNIT * (fw / 192);
+      const dh = UNIT * (fh / 192);
+      c.drawImage(sheets.throw, frame * fw, 0, fw, fh, -dw / 2, -dh * 0.62, dw, dh);
+    } else {
+      const sheet = carrying
+        ? (speed > 20 ? sheets.bombRun : sheets.bombIdle)
+        : (speed > 20 ? sheets.run : sheets.idle);
+      const frames = speed > 20 ? PAWN.RUN_F : PAWN.IDLE_F;
+      const rate = speed > 20 ? 12 : 8;
+      const frame = Math.floor(this.t * rate) % frames;
+      c.drawImage(sheet, frame * PAWN.FW, 0, PAWN.FW, PAWN.FH, -UNIT / 2, -UNIT * 0.62, UNIT, UNIT);
+    }
     c.restore();
-
-    // the carried dynamite sits in the raised hands
-    if (carrying) this.dynamite(c, p.pos.x, p.pos.y - UNIT * 0.44, 0.85, 0);
 
     if (p.shieldMs > 0) {
       c.save();
@@ -330,7 +368,6 @@ export class Renderer {
       c.restore();
     }
 
-    // small name tag (portrait cards carry the detail)
     c.font = 'bold 13px "Segoe UI", sans-serif';
     c.textAlign = 'center';
     c.fillStyle = 'rgba(8, 16, 34, .5)';
@@ -342,43 +379,45 @@ export class Renderer {
     c.fillText(p.name, p.pos.x, p.pos.y - UNIT * 0.62 + 5);
   }
 
-  /** Screen-space HUD: carved-shield portrait, ribbon name, hearts. */
-  private hudCards(c: CanvasRenderingContext2D, w: World, _scale: number): void {
+  private hudCards(c: CanvasRenderingContext2D, w: World): void {
     c.imageSmoothingEnabled = false;
-    const CARD = 92;
     let y = 10;
     for (const p of w.penguins) {
       const x = 10;
       c.globalAlpha = p.alive ? 1 : 0.4;
-      // shield with the pawn's face
       c.drawImage(this.a.img.carved, x, y, 64, 64);
       c.save();
       c.beginPath();
       c.roundRect(x + 8, y + 8, 48, 44, 8);
       c.clip();
-      const sheet = this.a.pawns[p.slot % this.a.pawns.length];
-      // head area of idle frame 0: roughly (60,42)-(132,114) in the 192 frame
-      c.drawImage(sheet, 58, 40, 76, 70, x + 4, y + 4, 56, 52);
+      c.drawImage(this.a.pawns[p.slot % this.a.pawns.length].idle, 58, 40, 76, 70, x + 4, y + 4, 56, 52);
       c.restore();
-      // ribbon with the name
       c.drawImage(this.a.img.ribbon, x + 60, y + 6, 116, 38);
       c.font = 'bold 13px "Segoe UI", sans-serif';
       c.textAlign = 'center';
       c.fillStyle = '#3a2a14';
       c.fillText(p.name.slice(0, 11), x + 118, y + 29);
-      // hearts under the ribbon
       if (p.alive) {
         for (let i = 0; i < Math.min(p.lives, MAX_LIVES); i++) {
           this.heart(c, x + 74 + i * 18, y + 54, 7, '#e6323f');
         }
       } else {
-        c.font = 'bold 14px "Segoe UI", sans-serif';
-        c.fillStyle = '#3a2a14';
         c.fillText('OUT', x + 92, y + 60);
       }
       c.globalAlpha = 1;
-      y += CARD - 22;
+      y += 70;
     }
+  }
+
+  private cloudLayer(c: CanvasRenderingContext2D, dtMs: number): void {
+    c.save();
+    c.globalAlpha = 0.88;
+    for (const cl of this.clouds) {
+      cl.x += cl.v * dtMs / 1000;
+      if (cl.x > ARENA_W + 300) cl.x = -600;
+      c.drawImage(this.a.img[cl.img], cl.x, cl.y, 432, 192);
+    }
+    c.restore();
   }
 
   private stepSheep(w: World, dtMs: number): void {
@@ -430,40 +469,38 @@ export class Renderer {
     c.fillText('?', 0, 6);
   }
 
-  private dynamite(c: CanvasRenderingContext2D, x: number, y: number, scale: number, frac: number): void {
-    const frame = Math.floor(this.t * (6 + frac * 14)) % 6;
-    const s = 52 * scale;
+  private bombSprite(c: CanvasRenderingContext2D, x: number, y: number, size: number, frac: number, spinning: boolean): void {
     if (frac > 0.6) {
       c.save();
       c.globalAlpha = 0.3 + (frac - 0.6) * 1.2;
       c.shadowColor = '#ff3b30';
       c.shadowBlur = 22;
       c.beginPath();
-      c.arc(x, y, s * 0.35, 0, Math.PI * 2);
+      c.arc(x, y, size * 0.35, 0, Math.PI * 2);
       c.fillStyle = '#ff3b30';
       c.fill();
       c.restore();
     }
-    c.drawImage(this.a.img.dynamite, frame * 64, 0, 64, 64, x - s / 2, y - s / 2, s, s);
+    const frame = spinning
+      ? Math.floor(this.t * 20) % 11
+      : Math.floor(this.t * (4 + frac * 12)) % 11;
+    c.drawImage(this.a.img.bombroll, frame * 100, 0, 100, 100, x - size / 2, y - size / 2, size, size);
   }
 
   private bombLayer(c: CanvasRenderingContext2D, w: World): void {
     const b = w.bomb;
     const frac = fuseFrac(b);
-
     if (b.s === 'delivering') {
       const target = w.penguins.find((p) => p.slot === b.toSlot);
       if (!target) return;
       const t = Math.min(b.t / BOMB.SKUA_MS, 1);
-      const sy = target.pos.y - 90 - (1 - t) * 420;
       c.font = 'bold 36px "Segoe UI", sans-serif';
       c.textAlign = 'center';
       c.fillStyle = '#ff5a5f';
       c.fillText('!', target.pos.x, target.pos.y - 70 - Math.abs(Math.sin(this.t * 8)) * 8);
-      this.dynamite(c, target.pos.x, sy, 1.2, 0);
+      this.bombSprite(c, target.pos.x, target.pos.y - 90 - (1 - t) * 420, 72, 0, true);
       return;
     }
-
     if (b.s === 'carried') {
       const me = w.penguins.find((p) => p.slot === b.slot);
       if (!me) return;
@@ -477,10 +514,20 @@ export class Renderer {
       c.arc(0, 0, BOMB.PASS_RADIUS, 0, Math.PI * 2);
       c.stroke();
       c.restore();
-      // (the dynamite itself is drawn in the carrier's raised hands)
+      // bomb art is baked into the carry sheets; add only the danger pulse
+      if (frac > 0.55) {
+        c.save();
+        c.globalAlpha = (frac - 0.55) * 0.9;
+        c.shadowColor = '#ff3b30';
+        c.shadowBlur = 24;
+        c.beginPath();
+        c.arc(me.pos.x, me.pos.y - UNIT * 0.5, 16, 0, Math.PI * 2);
+        c.fillStyle = '#ff3b30';
+        c.fill();
+        c.restore();
+      }
       return;
     }
-
     if (b.s === 'flying') {
       const x = b.from.x + (b.to.x - b.from.x) * b.t01;
       const y = b.from.y + (b.to.y - b.from.y) * b.t01;
@@ -497,14 +544,9 @@ export class Renderer {
       c.ellipse(x, y, 13 - h * 0.05, 6 - h * 0.02, 0, 0, Math.PI * 2);
       c.fillStyle = 'rgba(20, 50, 40, .4)';
       c.fill();
-      c.save();
-      c.translate(x, y - h);
-      c.rotate(this.t * 14);
-      this.dynamite(c, 0, 0, 1, fuseFrac(b));
-      c.restore();
+      this.bombSprite(c, x, y - h, 64, fuseFrac(b), true);
       return;
     }
-
     if (b.s === 'ground') {
       c.save();
       c.globalAlpha = 0.14 + Math.abs(Math.sin(this.t * (2 + frac * 10))) * 0.12;
@@ -513,35 +555,31 @@ export class Renderer {
       c.arc(b.pos.x, b.pos.y, BOMB.BLAST_RADIUS, 0, Math.PI * 2);
       c.fill();
       c.restore();
-      this.dynamite(c, b.pos.x, b.pos.y, 1, frac);
+      this.bombSprite(c, b.pos.x, b.pos.y, 58, frac, false);
     }
   }
 
   private updateBooms(c: CanvasRenderingContext2D, dtMs: number): void {
     for (const boom of this.booms) {
       boom.age += dtMs / 1000;
-      const frame = Math.floor(boom.age * 18);
-      if (frame < 9) {
+      const frame = Math.floor(boom.age * 16);
+      if (frame < 8) {
         const s = 230;
-        c.drawImage(this.a.img.explosions, frame * 192, 0, 192, 192, boom.x - s / 2, boom.y - s / 2, s, s);
+        c.drawImage(this.a.img.explosion, frame * 192, 0, 192, 192, boom.x - s / 2, boom.y - s / 2, s, s);
       }
     }
-    this.booms = this.booms.filter((b) => b.age * 18 < 9);
+    this.booms = this.booms.filter((b) => b.age * 16 < 8);
   }
 
   private updateSplashes(c: CanvasRenderingContext2D, dtMs: number): void {
-    for (const s of this.splashes) {
+    for (const s of this.splashFx) {
       s.age += dtMs / 1000;
-      for (const mult of [1, 0.6]) {
-        const r = (12 + s.age * 100) * mult;
-        c.beginPath();
-        c.arc(s.x, s.y, r, 0, Math.PI * 2);
-        c.lineWidth = Math.max(6 - s.age * 5, 1) * mult;
-        c.strokeStyle = `rgba(235, 250, 255, ${Math.max(0.85 - s.age, 0)})`;
-        c.stroke();
+      const frame = Math.floor(s.age * 16);
+      if (frame < 9) {
+        c.drawImage(this.a.img.splash, frame * 192, 0, 192, 192, s.x - 96, s.y - 96, 192, 192);
       }
     }
-    this.splashes = this.splashes.filter((s) => s.age < 1.1);
+    this.splashFx = this.splashFx.filter((s) => s.age * 16 < 9);
   }
 
   private updateShockwaves(c: CanvasRenderingContext2D, dtMs: number): void {
@@ -561,20 +599,18 @@ export class Renderer {
     const dt = dtMs / 1000;
     for (const s of this.spray) {
       s.age += dt;
-      if (s.age <= 0) continue;
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       s.vx *= 0.96;
       s.vy *= 0.96;
-      const life = s.color ? 0.9 : 0.5;
-      c.globalAlpha = Math.max(0.8 - (s.age / life) * 0.8, 0);
+      c.globalAlpha = Math.max(0.8 - s.age, 0);
       c.fillStyle = s.color ?? '#ffffff';
       c.beginPath();
-      c.arc(s.x, s.y, s.color ? 4 : 3, 0, Math.PI * 2);
+      c.arc(s.x, s.y, 4, 0, Math.PI * 2);
       c.fill();
     }
     c.globalAlpha = 1;
-    this.spray = this.spray.filter((s) => s.age < (s.color ? 0.9 : 0.5));
+    this.spray = this.spray.filter((s) => s.age < 0.9);
   }
 }
 

@@ -23,7 +23,7 @@ export const PICKUP_INTERVAL_MS = 6500; // spawn cadence while under the cap
 export const MAX_PICKUPS = 3;
 export const PICKUP_RADIUS = 20;        // touch distance
 
-export const GRID_COLS = 20;
-export const GRID_ROWS = 13;
-export const ARENA_W = GRID_COLS * 64;  // 1280
-export const ARENA_H = GRID_ROWS * 64;  // 832
+export const GRID_COLS = 26;
+export const GRID_ROWS = 16;
+export const ARENA_W = GRID_COLS * 64;  // 1664
+export const ARENA_H = GRID_ROWS * 64;  // 1024
