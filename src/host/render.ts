@@ -181,11 +181,15 @@ export class Renderer {
 
   private samePatch(i: Island, c2: number, r2: number, min: 1 | 2, skin: number): boolean {
     if (!this.land(i, c2, r2, min)) return false;
-    return i.skins[r2 * i.cols + c2] === skin;
+    const idx = r2 * i.cols + c2;
+    // a staircase is a cutaway: neighbors must close their cliff edges around it
+    if (min === 2 && i.stairs.has(idx)) return false;
+    const skinArr = min === 2 ? i.topSkins : i.skins;
+    return skinArr[idx] === skin;
   }
 
   private autotileSrc(i: Island, col: number, r: number, min: 1 | 2): [number, number] {
-    const skin = i.skins[r * i.cols + col];
+    const skin = (min === 2 ? i.topSkins : i.skins)[r * i.cols + col];
     const L = this.samePatch(i, col - 1, r, min, skin);
     const R = this.samePatch(i, col + 1, r, min, skin);
     const U = this.samePatch(i, col, r - 1, min, skin);

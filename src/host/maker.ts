@@ -306,7 +306,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
         }
         const sk = topSkins[idx];
         const sameTop = (c2: number, r2: number) =>
-          land(c2, r2, 2) && topSkins[r2 * GRID_COLS + c2] === sk;
+          land(c2, r2, 2) && !stairs.has(r2 * GRID_COLS + c2) && topSkins[r2 * GRID_COLS + c2] === sk;
         const L = sameTop(c - 1, r); const R = sameTop(c + 1, r);
         const U = sameTop(c, r - 1); const D = sameTop(c, r + 1);
         if (!land(c, r + 1, 2)) {
