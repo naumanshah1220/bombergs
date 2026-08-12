@@ -4,7 +4,7 @@
 
 import { ARENA_H, ARENA_W, GRID_COLS, GRID_ROWS } from '../sim/constants';
 import { TILE, type Cell, type DecoItem, type LevelData } from '../sim/island';
-import type { Assets } from './assets';
+import { DECO_META, type Assets } from './assets';
 
 const STORE = 'bombergs-levels';
 
@@ -16,7 +16,7 @@ function saveLevels(levels: Record<string, LevelData>): void {
   localStorage.setItem(STORE, JSON.stringify(levels));
 }
 
-const DECO_LIB = ['tree1', 'tree2', 'bush1', 'bush2', 'bush3', 'bush4', 'rock1', 'rock2', 'rock3', 'rock4'];
+const DECO_LIB = Object.keys(DECO_META);
 type Tool = 'water' | 'ground' | 'plateau' | 'stair' | string; // deco names too
 
 export function startMaker(app: HTMLElement, assets: Assets): void {
@@ -24,6 +24,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
   let stairs = new Set<number>();
   let deco: DecoItem[] = [];
   let tool: Tool = 'ground';
+  let skin = 1; // tilemap color 1-5
   let selected = -1; // deco index
   let painting = false;
 
@@ -32,6 +33,10 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
       <div style="flex:0 0 240px;box-sizing:border-box;background:#0e1430;padding:12px;
            overflow-y:auto;font-size:13px;color:#eaf6ff">
         <div style="font-weight:800;font-size:17px;margin-bottom:8px">🛠 MAP MAKER</div>
+        <label>grass color <select id="mskin" style="width:100%;padding:4px;background:#131a3a;color:#eaf6ff">
+          <option value="1">color 1</option><option value="2">color 2</option>
+          <option value="3">color 3</option><option value="4">color 4</option>
+          <option value="5">color 5</option></select></label>
         <div id="tools"></div>
         <div style="margin:10px 0 4px;opacity:.6">SELECTED DECO</div>
         <label>scale <input id="mscale" type="range" min="0.3" max="2.5" step="0.05" value="1" style="width:100%"></label>
@@ -67,6 +72,9 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     toolsDiv.appendChild(b);
   }
 
+  (document.getElementById('mskin') as HTMLSelectElement).addEventListener('change', (e) => {
+    skin = Number((e.target as HTMLSelectElement).value);
+  });
   const canvas = document.getElementById('mcanvas') as HTMLCanvasElement;
   const ctx = canvas.getContext('2d')!;
 
@@ -137,7 +145,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     const name = nameInput.value.trim();
     if (!name) { alert('name the level first'); return; }
     const levels = loadLevels();
-    levels[name] = { name, cols: GRID_COLS, rows: GRID_ROWS, cells: [...cells], stairs: [...stairs], deco: [...deco] };
+    levels[name] = { name, skin, cols: GRID_COLS, rows: GRID_ROWS, cells: [...cells], stairs: [...stairs], deco: [...deco] };
     saveLevels(levels);
     refreshLoad();
     alert(`saved "${name}" — it's now in the lobby's level picker`);
@@ -147,13 +155,15 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     if (!lv) return;
     cells = [...lv.cells] as Cell[];
     stairs = new Set(lv.stairs);
+    skin = lv.skin ?? 1;
+    (document.getElementById('mskin') as HTMLSelectElement).value = String(skin);
     deco = lv.deco.map((d) => ({ ...d }));
     nameInput.value = lv.name;
     selected = -1;
   });
   document.getElementById('mexport')!.addEventListener('click', () => {
     const name = nameInput.value.trim() || 'level';
-    const blob = new Blob([JSON.stringify({ name, cols: GRID_COLS, rows: GRID_ROWS, cells, stairs: [...stairs], deco }, null, 1)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ name, skin, cols: GRID_COLS, rows: GRID_ROWS, cells, stairs: [...stairs], deco }, null, 1)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${name}.json`;
@@ -175,6 +185,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
     ctx.save();
     ctx.translate((canvas.width - ARENA_W * scale) / 2, (canvas.height - ARENA_H * scale) / 2);
     ctx.scale(scale, scale);
+    const sheet = (assets.img as Record<string, HTMLImageElement>)['tilemap' + skin] ?? assets.img.tilemap1;
     const pat = ctx.createPattern(assets.img.water, 'repeat');
     if (pat) { ctx.fillStyle = pat; ctx.fillRect(0, 0, ARENA_W, ARENA_H); }
     for (let r = 0; r < GRID_ROWS; r++) {
@@ -183,31 +194,33 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
         const L = land(c - 1, r); const R = land(c + 1, r); const U = land(c, r - 1); const D = land(c, r + 1);
         const sx = (L && R ? 1 : R ? 0 : L ? 2 : 3) * 64;
         const sy = (U && D ? 1 : D ? 0 : U ? 2 : 3) * 64;
-        ctx.drawImage(assets.img.tilemap1, sx, sy, 64, 64, c * TILE, r * TILE, TILE, TILE);
+        ctx.drawImage(sheet, sx, sy, 64, 64, c * TILE, r * TILE, TILE, TILE);
       }
     }
     for (let r = 0; r < GRID_ROWS; r++) {
       for (let c = 0; c < GRID_COLS; c++) {
         const idx = r * GRID_COLS + c;
-        if (stairs.has(idx)) {
-          ctx.drawImage(assets.img.tilemap1, 3 * 64, 5 * 64, 64, 64, c * TILE, r * TILE - 6, TILE, TILE);
-          continue;
-        }
         if (cells[idx] !== 2) continue;
         const L = land(c - 1, r, 2); const R = land(c + 1, r, 2); const U = land(c, r - 1, 2); const D = land(c, r + 1, 2);
         if (!land(c, r + 1, 2)) {
           const wx = L && R ? 6 : R ? 5 : L ? 7 : 8;
-          ctx.drawImage(assets.img.tilemap1, wx * 64, 4 * 64, 64, 64, c * TILE, r * TILE + TILE - 40, TILE, TILE);
+          ctx.drawImage(sheet, wx * 64, 4 * 64, 64, 64, c * TILE, r * TILE + TILE - 40, TILE, TILE);
         }
         const sx = 320 + (L && R ? 1 : R ? 0 : L ? 2 : 3) * 64;
         const sy = (U && D ? 1 : D ? 0 : U ? 2 : 3) * 64;
-        ctx.drawImage(assets.img.tilemap2, sx, sy, 64, 64, c * TILE, r * TILE - 20, TILE, TILE);
+        ctx.drawImage(sheet, 320 + sx, sy, 64, 64, c * TILE, r * TILE - 20, TILE, TILE);
       }
+    }
+    for (const sidx of stairs) {
+      const sc2 = sidx % GRID_COLS;
+      const sr2 = Math.floor(sidx / GRID_COLS);
+      ctx.drawImage(sheet, 192, 256, 64, 128, sc2 * TILE, sr2 * TILE - TILE + 12, TILE, TILE * 2);
     }
     deco.forEach((d, i) => {
       const img = (assets.img as Record<string, HTMLImageElement>)[d.img];
-      if (!img) return;
-      const fw = d.img.startsWith('tree') ? 256 : d.img.startsWith('bush') ? 128 : img.width;
+      const meta = DECO_META[d.img];
+      if (!img || !meta) return;
+      const fw = meta.fw;
       const size = fw * d.scale;
       ctx.save();
       ctx.translate(d.x, d.y);

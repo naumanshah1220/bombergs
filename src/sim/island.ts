@@ -129,6 +129,7 @@ export function generateIsland(cols: number, rows: number, rand: () => number = 
 export type DecoItem = { img: string; x: number; y: number; scale: number; rot: number };
 export type LevelData = {
   name: string;
+  skin?: number; // tilemap color 1-5
   cols: number;
   rows: number;
   cells: number[];

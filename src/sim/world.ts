@@ -79,6 +79,7 @@ export type World = {
   penguins: Penguin[];
   island: Island;
   deco?: DecoItem[]; // hand-placed decorations from the map maker
+  skin?: number;     // tilemap color for hand-made levels
   bomb: BombState;
   rules: StageRules;
   pickups: Pickup[];
@@ -129,7 +130,7 @@ export function makeWorld(
     };
   });
   return {
-    penguins, island, deco: level?.deco, bomb: idleBomb(), rules,
+    penguins, island, deco: level?.deco, skin: level?.skin, bomb: idleBomb(), rules,
     pickups: [], pickupTimerMs: PICKUP_INTERVAL_MS / 2, nextPickupId: 1,
     tick: 0,
   };

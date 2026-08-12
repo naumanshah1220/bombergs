@@ -7,7 +7,10 @@ import { PLAYER_COLORS } from '../shared/protocol';
 
 const V2 = {
   tilemap1: 'v2/tilemap1.png',     // 9x6 64px: flat block (0,0), elev block (5,0), walls row 4, stairs col 3 rows 4-5
-  tilemap2: 'v2/tilemap2.png',     // same layout, elevation color
+  tilemap2: 'v2/tilemap2.png',     // same layout, other grass colors below
+  tilemap3: 'v2/tilemap3.png',
+  tilemap4: 'v2/tilemap4.png',
+  tilemap5: 'v2/tilemap5.png',
   water: 'v2/water.png',
   foam: 'v2/foam.png',             // 16 frames, 192
   shadow: 'v2/shadow.png',
@@ -24,6 +27,11 @@ const V2 = {
   sheepIdle: 'v2/sheep_idle.png',  // 6 frames, 128
   sheepMove: 'v2/sheep_move.png',  // 4 frames, 128
   tree1: 'v2/tree1.png', tree2: 'v2/tree2.png', // 6 frames, 256
+  tree3: 'v2/tree3.png', tree4: 'v2/tree4.png',
+  waterrock3: 'v2/waterrock3.png', waterrock4: 'v2/waterrock4.png',
+  house_blue: 'v2/house_blue.png', house_red: 'v2/house_red.png',
+  house_yellow: 'v2/house_yellow.png', house_purple: 'v2/house_purple.png',
+  house_black: 'v2/house_black.png',
   carved: 'carved.png',
   ribbon: 'ribbon.png',
 } as const;
@@ -143,5 +151,35 @@ export async function loadAssets(): Promise<Assets> {
     throwFrameH: yThrow.height,
   };
 }
+
+/** Placeable decoration metadata: frame width/height, frame count, anim fps.
+ * Shared by the map maker palette and the in-game renderer. */
+export const DECO_META: Record<string, { fw: number; fh: number; frames: number; rate: number }> = {
+  tree1: { fw: 256, fh: 256, frames: 6, rate: 7 },
+  tree2: { fw: 256, fh: 256, frames: 6, rate: 7 },
+  tree3: { fw: 256, fh: 256, frames: 6, rate: 7 },
+  tree4: { fw: 256, fh: 256, frames: 6, rate: 7 },
+  bush1: { fw: 128, fh: 128, frames: 8, rate: 7 },
+  bush2: { fw: 128, fh: 128, frames: 8, rate: 7 },
+  bush3: { fw: 128, fh: 128, frames: 8, rate: 7 },
+  bush4: { fw: 128, fh: 128, frames: 8, rate: 7 },
+  rock1: { fw: 64, fh: 64, frames: 1, rate: 0 },
+  rock2: { fw: 64, fh: 64, frames: 1, rate: 0 },
+  rock3: { fw: 64, fh: 64, frames: 1, rate: 0 },
+  rock4: { fw: 64, fh: 64, frames: 1, rate: 0 },
+  waterrock1: { fw: 64, fh: 64, frames: 16, rate: 8 },
+  waterrock2: { fw: 64, fh: 64, frames: 16, rate: 8 },
+  waterrock3: { fw: 64, fh: 64, frames: 16, rate: 8 },
+  waterrock4: { fw: 64, fh: 64, frames: 16, rate: 8 },
+  duck: { fw: 32, fh: 32, frames: 3, rate: 5 },
+  sheepIdle: { fw: 128, fh: 128, frames: 6, rate: 6 },
+  shadow: { fw: 192, fh: 192, frames: 1, rate: 0 },
+  foam: { fw: 192, fh: 192, frames: 16, rate: 10 },
+  house_blue: { fw: 128, fh: 192, frames: 1, rate: 0 },
+  house_red: { fw: 128, fh: 192, frames: 1, rate: 0 },
+  house_yellow: { fw: 128, fh: 192, frames: 1, rate: 0 },
+  house_purple: { fw: 128, fh: 192, frames: 1, rate: 0 },
+  house_black: { fw: 128, fh: 192, frames: 1, rate: 0 },
+};
 
 export const PAWN = { FW: 192, FH: 192, IDLE_F: 8, RUN_F: 6 };

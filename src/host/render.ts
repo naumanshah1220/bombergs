@@ -10,7 +10,7 @@ import { BOMB, fuseFrac } from '../sim/bomb';
 import { ARENA_H, ARENA_W, INVULN_MS, MAX_LIVES } from '../sim/constants';
 import { TILE, cellCenter, cellIndex, groundCells, isGround, type Island } from '../sim/island';
 import type { Penguin, Vec2, World, WorldEvent } from '../sim/world';
-import { PAWN, type Assets } from './assets';
+import { DECO_META, PAWN, type Assets } from './assets';
 
 type Fx = { x: number; y: number; age: number };
 type Tumble = { slot: number; x: number; y: number; vx: number; vy: number; age: number };
@@ -38,6 +38,7 @@ export class Renderer {
   private sheep = { x: 0, y: 0, timer: 0, vx: 0, vy: 0 };
   private waterPattern?: CanvasPattern;
   private inited = false;
+  private skin = 1;
 
   constructor(canvas: HTMLCanvasElement, assets: Assets) {
     this.canvas = canvas;
@@ -100,6 +101,7 @@ export class Renderer {
 
   draw(w: World, dtMs: number): void {
     this.t += dtMs / 1000;
+    this.skin = w.skin ?? 1;
     this.init(w.island);
     this.canvas.width = this.canvas.clientWidth;
     this.canvas.height = this.canvas.clientHeight;
@@ -197,32 +199,34 @@ export class Renderer {
       ic.imageSmoothingEnabled = false;
       ic.clearRect(0, 0, ARENA_W, ARENA_H);
       const RAISE = 20;
+      const skinKey = ('tilemap' + this.skin) as keyof typeof this.a.img;
+      const sheet = this.a.img[skinKey] ?? this.a.img.tilemap1;
       for (let r = 0; r < i.rows; r++) {
         for (let col = 0; col < i.cols; col++) {
           if (!this.land(i, col, r)) continue;
           const [sx, sy] = this.autotileSrc(i, col, r, 1);
-          ic.drawImage(this.a.img.tilemap1, sx, sy, 64, 64, col * TILE, r * TILE, TILE, TILE);
+          ic.drawImage(sheet, sx, sy, 64, 64, col * TILE, r * TILE, TILE, TILE);
         }
       }
       for (let r = 0; r < i.rows; r++) {
         for (let col = 0; col < i.cols; col++) {
           if (!this.land(i, col, r, 2)) continue;
-          const idx = cellIndex(i, col, r);
           const southLower = !this.land(i, col, r + 1, 2);
           if (southLower) {
             // cliff wall filling the seam below the raised top
             const wl = this.land(i, col - 1, r, 2) && !this.land(i, col - 1, r + 1, 2);
             const wr = this.land(i, col + 1, r, 2) && !this.land(i, col + 1, r + 1, 2);
             const wx = wl && wr ? 6 : wr ? 5 : wl ? 7 : 8;
-            ic.drawImage(this.a.img.tilemap1, wx * 64, 4 * 64, 64, 64, col * TILE, r * TILE + TILE - RAISE - 20, TILE, TILE);
+            ic.drawImage(sheet, wx * 64, 4 * 64, 64, 64, col * TILE, r * TILE + TILE - RAISE - 20, TILE, TILE);
           }
-          if (i.stairs.has(idx)) {
-            ic.drawImage(this.a.img.tilemap1, 3 * 64, 5 * 64, 64, 64, col * TILE, r * TILE - 6, TILE, TILE);
-          } else {
-            const [sx, sy] = this.autotileSrc(i, col, r, 2);
-            ic.drawImage(this.a.img.tilemap2, 320 + sx, sy, 64, 64, col * TILE, r * TILE - RAISE, TILE, TILE);
-          }
+          const [sx, sy] = this.autotileSrc(i, col, r, 2);
+          ic.drawImage(sheet, 320 + sx, sy, 64, 64, col * TILE, r * TILE - RAISE, TILE, TILE);
         }
+      }
+      for (const sidx of i.stairs) {
+        const scol = sidx % i.cols;
+        const srow = Math.floor(sidx / i.cols);
+        ic.drawImage(sheet, 192, 256, 64, 128, scol * TILE, srow * TILE - TILE + 12, TILE, TILE * 2);
       }
       this.islandCache = { canvas, version: i.version };
     }
@@ -234,15 +238,15 @@ export class Renderer {
       for (const d of w.deco) {
         const img = (this.a.img as Record<string, HTMLImageElement>)[d.img];
         if (!img) continue;
-        const animated = d.img.startsWith('bush') || d.img.startsWith('tree');
-        const fw = d.img.startsWith('tree') ? 256 : d.img.startsWith('bush') ? 128 : img.width;
-        const frames = d.img.startsWith('tree') ? 6 : d.img.startsWith('bush') ? 8 : 1;
-        const frame = animated ? Math.floor(this.t * 7) % frames : 0;
-        const size = fw * d.scale;
+        const meta = DECO_META[d.img];
+        if (!meta) continue;
+        const frame = meta.frames > 1 ? Math.floor(this.t * meta.rate) % meta.frames : 0;
+        const size = meta.fw * d.scale;
+        const dh = size * (meta.fh / meta.fw);
         c.save();
         c.translate(d.x, d.y);
         c.rotate(d.rot);
-        c.drawImage(img, frame * fw, 0, fw, img.height, -size / 2, -size * 0.7, size, size * (img.height / fw));
+        c.drawImage(img, frame * meta.fw, 0, meta.fw, meta.fh, -size / 2, -dh * 0.7, size, dh);
         c.restore();
       }
       return;
