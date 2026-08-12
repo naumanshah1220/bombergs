@@ -38,7 +38,6 @@ export class Renderer {
   private sheep = { x: 0, y: 0, timer: 0, vx: 0, vy: 0 };
   private waterPattern?: CanvasPattern;
   private inited = false;
-  private skin = 1;
 
   constructor(canvas: HTMLCanvasElement, assets: Assets) {
     this.canvas = canvas;
@@ -101,7 +100,6 @@ export class Renderer {
 
   draw(w: World, dtMs: number): void {
     this.t += dtMs / 1000;
-    this.skin = w.skin ?? 1;
     this.init(w.island);
     this.canvas.width = this.canvas.clientWidth;
     this.canvas.height = this.canvas.clientHeight;
@@ -180,11 +178,17 @@ export class Renderer {
     }
   }
 
+  private samePatch(i: Island, c2: number, r2: number, min: 1 | 2, skin: number): boolean {
+    if (!this.land(i, c2, r2, min)) return false;
+    return i.skins[r2 * i.cols + c2] === skin;
+  }
+
   private autotileSrc(i: Island, col: number, r: number, min: 1 | 2): [number, number] {
-    const L = this.land(i, col - 1, r, min);
-    const R = this.land(i, col + 1, r, min);
-    const U = this.land(i, col, r - 1, min);
-    const D = this.land(i, col, r + 1, min);
+    const skin = i.skins[r * i.cols + col];
+    const L = this.samePatch(i, col - 1, r, min, skin);
+    const R = this.samePatch(i, col + 1, r, min, skin);
+    const U = this.samePatch(i, col, r - 1, min, skin);
+    const D = this.samePatch(i, col, r + 1, min, skin);
     const sc = L && R ? 1 : R ? 0 : L ? 2 : 3;
     const sr = U && D ? 1 : D ? 0 : U ? 2 : 3;
     return [sc * 64, sr * 64];
@@ -199,18 +203,19 @@ export class Renderer {
       ic.imageSmoothingEnabled = false;
       ic.clearRect(0, 0, ARENA_W, ARENA_H);
       const RAISE = 20;
-      const skinKey = ('tilemap' + this.skin) as keyof typeof this.a.img;
-      const sheet = this.a.img[skinKey] ?? this.a.img.tilemap1;
+      const sheetFor = (idx: number) =>
+        (this.a.img as Record<string, HTMLImageElement>)['tilemap' + (i.skins[idx] ?? 1)] ?? this.a.img.tilemap1;
       for (let r = 0; r < i.rows; r++) {
         for (let col = 0; col < i.cols; col++) {
           if (!this.land(i, col, r)) continue;
           const [sx, sy] = this.autotileSrc(i, col, r, 1);
-          ic.drawImage(sheet, sx, sy, 64, 64, col * TILE, r * TILE, TILE, TILE);
+          ic.drawImage(sheetFor(r * i.cols + col), sx, sy, 64, 64, col * TILE, r * TILE, TILE, TILE);
         }
       }
       for (let r = 0; r < i.rows; r++) {
         for (let col = 0; col < i.cols; col++) {
           if (!this.land(i, col, r, 2)) continue;
+          const sheet = sheetFor(r * i.cols + col);
           const southLower = !this.land(i, col, r + 1, 2);
           if (southLower) {
             // cliff wall filling the seam below the raised top
@@ -226,7 +231,7 @@ export class Renderer {
       for (const sidx of i.stairs) {
         const scol = sidx % i.cols;
         const srow = Math.floor(sidx / i.cols);
-        ic.drawImage(sheet, 192, 256, 64, 128, scol * TILE, srow * TILE - TILE + 12, TILE, TILE * 2);
+        ic.drawImage(sheetFor(sidx), 192, 256, 64, 128, scol * TILE, srow * TILE - TILE + 12, TILE, TILE * 2);
       }
       this.islandCache = { canvas, version: i.version };
     }

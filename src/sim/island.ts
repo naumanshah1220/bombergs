@@ -10,6 +10,7 @@ export type Island = {
   cols: number;
   rows: number;
   cells: Cell[];        // level per cell
+  skins: number[];      // tilemap color 1-5 per cell (cosmetic)
   stairs: Set<number>;  // cell indices that connect level 1 ↔ 2
   version: number;      // bumped on damage — renderers key caches on it
 };
@@ -72,7 +73,7 @@ export function groundCells(i: Island, level?: Cell): { c: number; r: number }[]
  */
 export function generateIsland(cols: number, rows: number, rand: () => number = Math.random): Island {
   const cells = new Array<Cell>(cols * rows).fill(0);
-  const i: Island = { cols, rows, cells, stairs: new Set(), version: 0 };
+  const i: Island = { cols, rows, cells, skins: new Array(cols * rows).fill(1), stairs: new Set(), version: 0 };
   const left = 2;
   const top = 2;
   const right = cols - 3;
@@ -133,6 +134,7 @@ export type LevelData = {
   cols: number;
   rows: number;
   cells: number[];
+  skins?: number[];
   stairs: number[];
   deco: DecoItem[];
 };
@@ -142,6 +144,7 @@ export function islandFromLevel(level: LevelData): Island {
     cols: level.cols,
     rows: level.rows,
     cells: [...level.cells] as Cell[],
+    skins: level.skins ? [...level.skins] : new Array(level.cols * level.rows).fill(level.skin ?? 1),
     stairs: new Set(level.stairs),
     version: 0,
   };
