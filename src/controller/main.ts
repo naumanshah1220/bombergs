@@ -146,10 +146,23 @@ function connect(): void {
     return;
   }
   ui.showJoin(room, true);
-  const peer = new Peer();
+  const peer = new Peer({
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
+      ],
+    },
+  });
   peer.on('open', () => {
     conn = peer.connect(hostPeerId(room), { reliable: true });
-    conn.on('open', () => ui.showJoin(room, false));
+    const joinTimeout = setTimeout(() => {
+      if (!conn?.open) {
+        ui.showError('Still connecting… make sure this phone is on the SAME Wi-Fi as the PC (not mobile data), then reload.');
+      }
+    }, 10000);
+    conn.on('open', () => { clearTimeout(joinTimeout); ui.showJoin(room, false); });
     conn.on('data', (d) => handleHostMessage(d as H2C));
     conn.on('close', () => ui.showError('Lost connection to the TV. Reload to rejoin.'));
   });
