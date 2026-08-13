@@ -20,6 +20,29 @@ export type H2C =
   | { t: 'draftOffer'; options: AbilityId[] }
   | { t: 'status'; alive: boolean; placement?: number; score: number };
 
+/**
+ * ICE servers for both ends of the phone↔PC link.
+ *
+ * Passing `config` to the Peer constructor REPLACES PeerJS's default rather
+ * than extending it, so this list has to stay complete. Dropping the TURN
+ * entry removes the relay that carries the connection whenever the phone and
+ * the PC cannot reach each other directly — the failure mode is a controller
+ * stuck forever on "Connecting…", with no error anywhere. (Learned the hard
+ * way: a STUN-only override here broke every join.)
+ */
+export const ICE_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    {
+      urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'],
+      username: 'peerjs',
+      credential: 'peerjsp',
+    },
+  ],
+  sdpSemantics: 'unified-plan',
+};
+
 /** 8 player colors, index = slot. */
 export const PLAYER_COLORS = [
   '#FF5A5F', '#FFB400', '#3DDC84', '#29B6F6',

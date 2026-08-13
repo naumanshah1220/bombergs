@@ -2,7 +2,7 @@
 // state the host tells us to be in.
 
 import Peer, { type DataConnection } from 'peerjs';
-import { hostPeerId, type AbilityId, type C2H, type H2C } from '../shared/protocol';
+import { ICE_CONFIG, hostPeerId, type AbilityId, type C2H, type H2C } from '../shared/protocol';
 import { FLAT_LIMIT, flatness, makeSteer, rollFromGravity } from '../shared/steer';
 import { requestMotionPermission, startRealSensors, startSimSensors, type SensorSource } from './sensors';
 import { ControllerUi, type DriveScheme } from './ui';
@@ -146,22 +146,18 @@ function connect(): void {
     return;
   }
   ui.showJoin(room, true);
-  const peer = new Peer({
-    config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' },
-      ],
-    },
-  });
+  const peer = new Peer({ config: ICE_CONFIG });
   peer.on('open', () => {
     conn = peer.connect(hostPeerId(room), { reliable: true });
+    // Report the ICE state on stall: "checking" means we never found a route,
+    // which is the only failure WebRTC otherwise reports as silence.
+    let iceState = 'new';
+    conn.on('iceStateChanged', (s: string) => { iceState = s; });
     const joinTimeout = setTimeout(() => {
       if (!conn?.open) {
-        ui.showError('Still connecting… make sure this phone is on the SAME Wi-Fi as the PC (not mobile data), then reload.');
+        ui.showError(`Couldn't reach the TV (link state: ${iceState}). Check the room code still shows ${room} on the big screen, then reload.`);
       }
-    }, 10000);
+    }, 12000);
     conn.on('open', () => { clearTimeout(joinTimeout); ui.showJoin(room, false); });
     conn.on('data', (d) => handleHostMessage(d as H2C));
     conn.on('close', () => ui.showError('Lost connection to the TV. Reload to rejoin.'));

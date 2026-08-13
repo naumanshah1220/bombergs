@@ -2,7 +2,7 @@
 
 import Peer, { type DataConnection } from 'peerjs';
 import {
-  PLAYER_COLORS, hostPeerId, roomCode, type C2H, type H2C,
+  ICE_CONFIG, PLAYER_COLORS, hostPeerId, roomCode, type C2H, type H2C,
 } from '../shared/protocol';
 
 export type ControllerInfo = {
@@ -35,7 +35,7 @@ const HEARTBEAT_DROP_MS = 5000;
 
 export function createRoom(handlers: RoomHandlers, onReady: (room: Room) => void, onError: (err: string) => void): void {
   const code = roomCode();
-  const peer = new Peer(hostPeerId(code));
+  const peer = new Peer(hostPeerId(code), { config: ICE_CONFIG });
   const conns = new Map<number, DataConnection>();
   const tokens = new Map<string, number>(); // slotToken → slot, for reclaim
   const controllers = new Map<number, ControllerInfo>();
