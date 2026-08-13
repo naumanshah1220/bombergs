@@ -2,7 +2,7 @@
 // state the host tells us to be in.
 
 import Peer, { type DataConnection } from 'peerjs';
-import { ICE_CONFIG, hostPeerId, type AbilityId, type C2H, type H2C } from '../shared/protocol';
+import { hostPeerId, type AbilityId, type C2H, type H2C } from '../shared/protocol';
 import { FLAT_LIMIT, flatness, makeSteer, rollFromGravity } from '../shared/steer';
 import { requestMotionPermission, startRealSensors, startSimSensors, type SensorSource } from './sensors';
 import { ControllerUi, type DriveScheme } from './ui';
@@ -146,7 +146,11 @@ function connect(): void {
     return;
   }
   ui.showJoin(room, true);
-  const peer = new Peer({ config: ICE_CONFIG });
+  // No `config` here, deliberately. Passing one REPLACES PeerJS's default
+  // (which carries its own STUN + TURN relays) rather than extending it, and
+  // a hand-written substitute broke every phone join while PC-to-PC kept
+  // working. If ICE ever needs tuning, extend the default — never replace it.
+  const peer = new Peer();
   peer.on('open', () => {
     conn = peer.connect(hostPeerId(room), { reliable: true });
     // Report the ICE state on stall: "checking" means we never found a route,
