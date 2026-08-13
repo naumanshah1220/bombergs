@@ -4,6 +4,7 @@ import Peer, { type DataConnection } from 'peerjs';
 import {
   PLAYER_COLORS, hostPeerId, roomCode, type C2H, type H2C,
 } from '../shared/protocol';
+import { relayHost, type Conn } from '../shared/relay';
 
 export type ControllerInfo = {
   slot: number;
@@ -35,8 +36,7 @@ const HEARTBEAT_DROP_MS = 5000;
 
 export function createRoom(handlers: RoomHandlers, onReady: (room: Room) => void, onError: (err: string) => void): void {
   const code = roomCode();
-  const peer = new Peer(hostPeerId(code)); // defaults only — see controller/main.ts
-  const conns = new Map<number, DataConnection>();
+  const conns = new Map<number, Conn>();
   const tokens = new Map<string, number>(); // slotToken → slot, for reclaim
   const controllers = new Map<number, ControllerInfo>();
 
@@ -47,14 +47,24 @@ export function createRoom(handlers: RoomHandlers, onReady: (room: Room) => void
     broadcast(msg) { for (const c of conns.values()) c.send(msg); },
   };
 
-  peer.on('open', () => onReady(room));
-  peer.on('error', (err) => {
-    // 'unavailable-id' = room code collision → just retry with a fresh code
-    if (err.type === 'unavailable-id') createRoom(handlers, onReady, onError);
-    else onError(`Network error: ${err.type}`);
-  });
+  // Prefer the dev server's relay: it needs no NAT traversal, so it works on
+  // phones that WebRTC cannot reach. Static hosting has no relay, so PeerJS
+  // remains the fallback.
+  relayHost(code, accept).then(
+    () => onReady(room),
+    () => {
+      const peer = new Peer(hostPeerId(code)); // defaults only — never pass `config`
+      peer.on('open', () => onReady(room));
+      peer.on('error', (err) => {
+        // 'unavailable-id' = room code collision → just retry with a fresh code
+        if (err.type === 'unavailable-id') createRoom(handlers, onReady, onError);
+        else onError(`Network error: ${err.type}`);
+      });
+      peer.on('connection', (conn: DataConnection) => accept(conn as unknown as Conn));
+    },
+  );
 
-  peer.on('connection', (conn) => {
+  function accept(conn: Conn): void {
     let slot = -1;
     conn.on('data', (raw) => {
       const msg = raw as C2H;
@@ -98,7 +108,7 @@ export function createRoom(handlers: RoomHandlers, onReady: (room: Room) => void
       if (c) { c.connected = false; c.steer = 0; c.tap = false; }
       handlers.onLeave(slot);
     }
-  });
+  }
 
   // Heartbeat sweep: a controller that stops sending input goes neutral.
   setInterval(() => {

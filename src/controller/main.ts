@@ -1,8 +1,9 @@
 // Controller entry: join room → calibrate → stream input at 30Hz, render the
 // state the host tells us to be in.
 
-import Peer, { type DataConnection } from 'peerjs';
+import Peer from 'peerjs';
 import { hostPeerId, type AbilityId, type C2H, type H2C } from '../shared/protocol';
+import { relayController, type Conn } from '../shared/relay';
 import { FLAT_LIMIT, flatness, makeSteer, rollFromGravity } from '../shared/steer';
 import { requestMotionPermission, startRealSensors, startSimSensors, type SensorSource } from './sensors';
 import { ControllerUi, type DriveScheme } from './ui';
@@ -12,7 +13,7 @@ const room = (params.get('room') ?? '').toUpperCase();
 const simMode = params.get('sim') === '1';
 
 const app = document.getElementById('app')!;
-let conn: DataConnection | undefined;
+let conn: Conn | undefined;
 let sensors: SensorSource | undefined;
 let steerFn: ((g: { x: number; y: number; z: number }) => number) | undefined;
 let tapHeld = false;
@@ -146,31 +147,43 @@ function connect(): void {
     return;
   }
   ui.showJoin(room, true);
-  // No `config` here, deliberately. Passing one REPLACES PeerJS's default
-  // (which carries its own STUN + TURN relays) rather than extending it, and
-  // a hand-written substitute broke every phone join while PC-to-PC kept
-  // working. If ICE ever needs tuning, extend the default — never replace it.
-  const peer = new Peer();
-  peer.on('open', () => {
-    conn = peer.connect(hostPeerId(room), { reliable: true });
-    // Report the ICE state on stall: "checking" means we never found a route,
-    // which is the only failure WebRTC otherwise reports as silence.
-    let iceState = 'new';
-    conn.on('iceStateChanged', (s: string) => { iceState = s; });
-    const joinTimeout = setTimeout(() => {
-      if (!conn?.open) {
-        ui.showError(`Couldn't reach the TV (link state: ${iceState}). Check the room code still shows ${room} on the big screen, then reload.`);
-      }
-    }, 12000);
-    conn.on('open', () => { clearTimeout(joinTimeout); ui.showJoin(room, false); });
-    conn.on('data', (d) => handleHostMessage(d as H2C));
-    conn.on('close', () => ui.showError('Lost connection to the TV. Reload to rejoin.'));
-  });
-  peer.on('error', (err) => {
-    ui.showError(err.type === 'peer-unavailable'
-      ? `Room ${room} not found. Check the code on the TV.`
-      : `Connection trouble (${err.type}). Reload to retry.`);
-  });
+  // Relay first: a socket back to the origin that served this page always
+  // reaches the PC, with no NAT traversal to fail. WebRTC is the fallback for
+  // static hosting, where there is no relay.
+  relayController(room).then(attach, connectViaWebRtc);
+
+  function attach(c: Conn): void {
+    conn = c;
+    ui.showJoin(room, false);
+    c.on('data', (d) => handleHostMessage(d as H2C));
+    c.on('close', () => ui.showError('Lost connection to the TV. Reload to rejoin.'));
+  }
+
+  function connectViaWebRtc(): void {
+    // No `config` here, deliberately. Passing one REPLACES PeerJS's default
+    // (which carries its own STUN + TURN relays) rather than extending it, and
+    // a hand-written substitute broke every phone join while PC-to-PC kept
+    // working. If ICE ever needs tuning, extend the default — never replace it.
+    const peer = new Peer();
+    peer.on('open', () => {
+      const dc = peer.connect(hostPeerId(room), { reliable: true });
+      // Report the ICE state on stall: "checking" means we never found a route,
+      // which is the only failure WebRTC otherwise reports as silence.
+      let iceState = 'new';
+      dc.on('iceStateChanged', (s: string) => { iceState = s; });
+      const joinTimeout = setTimeout(() => {
+        if (!dc.open) {
+          ui.showError(`Couldn't reach the TV (link state: ${iceState}). Check the room code still shows ${room} on the big screen, then reload.`);
+        }
+      }, 12000);
+      dc.on('open', () => { clearTimeout(joinTimeout); attach(dc as unknown as Conn); });
+    });
+    peer.on('error', (err) => {
+      ui.showError(err.type === 'peer-unavailable'
+        ? `Room ${room} not found. Check the code on the TV.`
+        : `Connection trouble (${err.type}). Reload to retry.`);
+    });
+  }
 }
 
 // 30Hz input pump — also acts as the keepalive from the moment we connect,
