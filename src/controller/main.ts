@@ -188,6 +188,8 @@ function connect(): void {
 
 // 30Hz input pump — also acts as the keepalive from the moment we connect,
 // so the host never mistakes "still calibrating" for "walked away".
+let lastSent = { x: 0, y: 0, steer: 0, tap: false, throttle: undefined as number | undefined, at: 0 };
+
 setInterval(() => {
   if (!conn?.open) return;
   let steer = 0;
@@ -198,14 +200,26 @@ setInterval(() => {
     flat = !sensors.sim && flatness(g) > FLAT_LIMIT;
     ui.updatePlay(steer, flat);
   }
-  send({
-    t: 'input',
-    steer: flat ? 0 : steer,
-    tap: tapQueued || tapHeld,
-    throttle: scheme === 'gas' ? (gasHeld ? 1 : 0) : undefined,
-    move: scheme === 'stick' ? moveVec : undefined,
-  });
+  const move = scheme === 'stick' ? moveVec : undefined;
+  const tap = tapQueued || tapHeld;
+  const throttle = scheme === 'gas' ? (gasHeld ? 1 : 0) : undefined;
+  const now = Date.now();
+
+  // Input is state, not events: only the newest value matters. Resending an
+  // unchanged stick just burns round-trips, and on a relayed link those are
+  // expensive enough to feel like input lag.
+  const moved = Math.abs((move?.x ?? 0) - lastSent.x) > 0.02
+    || Math.abs((move?.y ?? 0) - lastSent.y) > 0.02
+    || Math.abs((flat ? 0 : steer) - lastSent.steer) > 0.02;
+  if (!moved && tap === lastSent.tap && throttle === lastSent.throttle
+      && now - lastSent.at < 500) return; // 500ms keepalive beats the host's 5s drop
+  // Never queue behind a backlog — a stale input is worse than a skipped one.
+  // Taps are the exception: dropping one loses a throw.
+  if (conn.busy?.() && !tapQueued) return;
+
+  send({ t: 'input', steer: flat ? 0 : steer, tap, throttle, move });
+  lastSent = { x: move?.x ?? 0, y: move?.y ?? 0, steer: flat ? 0 : steer, tap, throttle, at: now };
   tapQueued = false;
-}, 20); // 50Hz — input latency budget matters more than bandwidth here
+}, 33); // 30Hz ceiling; the change check usually keeps it far below that
 
 connect();

@@ -58,10 +58,14 @@ function boot(): void {
 
 type JoinTarget = { label: string; origin: string; hint: string; here?: boolean };
 
+// Ranked by input latency, which is what the game actually feels. Everything
+// now rides a WebSocket to this server, so a nearby route beats a public one:
+// the tunnel goes out to Cloudflare and back for every packet.
 const HINTS: Record<string, string> = {
-  Tunnel: 'HTTPS, works on any network — the reliable one for phones',
-  Tailscale: 'switch Tailscale ON on the phone (plain HTTP, so phone browsers restrict it)',
-  'PC hotspot': 'connect the phone to this PC’s hotspot first',
+  Tailscale: '⚡ fast (~15ms) — switch Tailscale ON on the phone',
+  'PC hotspot': '⚡ fast — connect the phone to this PC’s hotspot',
+  'Wi-Fi': '⚡ fastest — needs the firewall rule for port 5173',
+  Tunnel: 'works anywhere with no setup, but adds ~100ms of input lag',
 };
 
 /**
@@ -88,9 +92,6 @@ async function refreshTunnelUrl(): Promise<void> {
 function joinTargets(): JoinTarget[] {
   const port = location.port ? `:${location.port}` : '';
   const out: JoinTarget[] = [];
-  // Listed first because it is the only option that is both HTTPS and
-  // firewall-independent, which is what phones actually need.
-  if (tunnelUrl) out.push({ label: 'Tunnel', origin: tunnelUrl, hint: HINTS.Tunnel });
   for (const { label, host } of typeof __NET_HOSTS__ === 'undefined' ? [] : __NET_HOSTS__) {
     out.push({
       label,
@@ -102,6 +103,10 @@ function joinTargets(): JoinTarget[] {
   // The page's own origin is only worth listing separately when it is NOT one
   // of the interface addresses above — otherwise a generic "This page" would
   // shadow the far more useful "Tailscale" / "Wi-Fi" name for the same URL.
+  // Last resort: every packet detours through Cloudflare, so only reach for
+  // this when no local route is available.
+  if (tunnelUrl) out.push({ label: 'Tunnel', origin: tunnelUrl, hint: HINTS.Tunnel });
+
   const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   const onOrigin = out.find((t) => t.origin === location.origin);
   if (onOrigin) onOrigin.here = true;
@@ -120,7 +125,7 @@ function joinTargets(): JoinTarget[] {
 // Key is versioned: everyone who had picked a LAN address before the tunnel
 // existed would otherwise stay pinned to it, which is the option most likely
 // to be firewall-blocked.
-const JOIN_PREF_KEY = 'bombergs-join-label-v2';
+const JOIN_PREF_KEY = 'bombergs-join-label-v3';
 
 function pickJoinTarget(): JoinTarget {
   const targets = joinTargets();

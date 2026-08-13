@@ -13,6 +13,8 @@ export type Conn = {
   send(msg: unknown): void;
   close(): void;
   on(ev: Ev, fn: (d?: unknown) => void): void;
+  /** True when bytes are still queued — sending more would only add latency. */
+  busy?(): boolean;
 };
 
 type RelayConn = Conn & { emit(ev: Ev, d?: unknown): void; setOpen(v: boolean): void };
@@ -81,6 +83,7 @@ export function relayController(code: string): Promise<Conn> {
     const id = Math.random().toString(36).slice(2);
     try { ws = new WebSocket(relayUrl({ room: code, role: 'ctrl', id })); } catch { reject(); return; }
     const conn = makeConn((msg) => ws.send(JSON.stringify(msg)), () => ws.close());
+    conn.busy = (): boolean => ws.bufferedAmount > 0;
     const giveUp = setTimeout(() => { ws.close(); reject(); }, DIAL_MS);
 
     ws.onopen = () => {
