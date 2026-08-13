@@ -10,6 +10,7 @@ export const C = {
   STICK_GRIP_MULT: 2.4,     // joystick control bites harder
   PENGUIN_RADIUS: 14,       // px collision radius
   BOT_SPEED_MULT: 1.0,      // even footing with humans
+  THROW_RADIUS: 150,        // px — carrier can throw at targets this close
 } as const satisfies Record<string, number>;
 
 export type Tunables = { -readonly [K in keyof typeof C]: number };

@@ -1,18 +1,19 @@
-// Bot driving. Priorities, highest first:
-//   1. Don't drive into the water (or a ground bomb).
-//   2. Carrier: hunt the nearest victim, throw when in range.
-//   3. Runner: dodge an incoming throw, flee the carrier.
-//   4. Otherwise wander.
+// Bot driving, in two layers:
+//   1. INTENT — where this bot wants to go: hunt, dodge, flee, shop, wander,
+//      or go find the stairs when it is stranded on its own level.
+//   2. SAFETY — bends that intent around water and cliffs.
+// Keeping them separate matters: safety used to be a hard override that ran
+// first, so a carrier standing anywhere near a shoreline stopped hunting
+// entirely and matches stalled out with survivors still standing.
 
-import { BOMB, carrierSlot } from './bomb';
-import { ARENA_H, ARENA_W } from './constants';
+import { BOMB, carrierSlot, fuseFrac } from './bomb';
+import { ARENA_H, ARENA_W, TUNE } from './constants';
 import { canStep, cellAt, isGround, isStairAt, nearestStair } from './island';
 import type { Penguin, World } from './world';
 
-export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; throttle?: number } {
-  const edge = edgeAvoid(w, p);
-  if (edge !== undefined) return { steer: edge, tap: false, throttle: 0.3 }; // brake while turning away
-
+/** Where the bot wants to go this tick, before safety has its say. */
+function intent(w: World, p: Penguin): { ang: number; tap: boolean } {
+  const angTo = (t: { x: number; y: number }): number => Math.atan2(t.y - p.pos.y, t.x - p.pos.x);
   const carrier = carrierSlot(w.bomb);
 
   if (carrier === p.slot) {
@@ -27,33 +28,36 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; 
       if (d < bestD) { bestD = d; best = q; }
     }
     if (best) {
-      const aimPt = navPoint(w, p, best.pos);
-      const aim = aimPt
-        ? Math.atan2(aimPt.y - p.pos.y, aimPt.x - p.pos.x)
-        : Math.atan2(
-            best.pos.y + best.vel.y * 0.25 - p.pos.y,
-            best.pos.x + best.vel.x * 0.25 - p.pos.x,
-          );
-      return { steer: turnToward(p.heading, aim), tap: bestD < BOMB.PASS_RADIUS * 0.8 };
+      const via = navPoint(w, p, best.pos);
+      const ang = via
+        ? angTo(via)
+        : angTo({ x: best.pos.x + best.vel.x * 0.25, y: best.pos.y + best.vel.y * 0.25 });
+      return { ang, tap: bestD < TUNE.THROW_RADIUS * 0.8 };
     }
-    return { steer: wander(w, p), tap: false };
+    return { ang: p.heading + wander(w, p), tap: false };
   }
 
   const abilityReady = p.ability !== undefined && p.ability.cooldownMs <= 0;
 
   // bomb homing on ME? the only escape is an ability at the right moment
   if (w.bomb.s === 'flying' && w.bomb.toSlot === p.slot && !w.bomb.dodged) {
-    const away = Math.atan2(p.pos.y - w.bomb.from.y, p.pos.x - w.bomb.from.x);
-    return { steer: turnToward(p.heading, away), tap: abilityReady && w.bomb.t01 > 0.4 };
+    return {
+      ang: Math.atan2(p.pos.y - w.bomb.from.y, p.pos.x - w.bomb.from.x),
+      tap: abilityReady && w.bomb.t01 > 0.4,
+    };
   }
 
-  // ground bomb nearby? steer clear
+  // A dropped bomb with plenty of fuse left is an OPPORTUNITY, not a hazard:
+  // grab it and tag someone. Bots that fled every ground bomb left it lying
+  // there to burn out harmlessly — a third of each match with the bomb out of
+  // play, and nobody losing lives.
   if (w.bomb.s === 'ground') {
     const d = Math.hypot(w.bomb.pos.x - p.pos.x, w.bomb.pos.y - p.pos.y);
-    if (d < BOMB.BLAST_RADIUS * 1.4) {
-      const away = Math.atan2(p.pos.y - w.bomb.pos.y, p.pos.x - w.bomb.pos.x);
-      return { steer: turnToward(p.heading, away), tap: false };
+    const hot = fuseFrac(w.bomb) > 0.5; // past halfway: too risky to pick up
+    if (hot && d < BOMB.BLAST_RADIUS * 1.4) {
+      return { ang: Math.atan2(p.pos.y - w.bomb.pos.y, p.pos.x - w.bomb.pos.x), tap: false };
     }
+    if (!hot && d < 420) return { ang: angTo(navPoint(w, p, w.bomb.pos) ?? w.bomb.pos), tap: false };
   }
 
   // flee a nearby carrier — panic-button an escape ability when cornered
@@ -62,31 +66,50 @@ export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; 
     if (hunter?.alive) {
       const d = Math.hypot(hunter.pos.x - p.pos.x, hunter.pos.y - p.pos.y);
       if (d < 320) {
-        const away = Math.atan2(p.pos.y - hunter.pos.y, p.pos.x - hunter.pos.x);
-        const cornered = d < 160 && (p.ability?.id === 'blink' || p.ability?.id === 'dash' || p.ability?.id === 'shield');
-        return { steer: turnToward(p.heading, away), tap: abilityReady && cornered };
+        const cornered = d < 160 && p.ability !== undefined;
+        return {
+          ang: Math.atan2(p.pos.y - hunter.pos.y, p.pos.x - hunter.pos.x),
+          tap: abilityReady && cornered,
+        };
       }
     }
   }
 
-  // free time: shopping trip to the nearest pickup
+  // Free time: shopping trip to the nearest pickup that is actually worth
+  // something. Bots used to fetch every heart on the map, and once they
+  // stopped drowning they out-healed the bomb and matches never ended.
   let bestPk: { x: number; y: number } | undefined;
   let bestD = 520;
   for (const pk of w.pickups) {
+    // "Wounded" is relative to THIS match's starting lives, not the global
+    // default — practice and short matches set their own.
+    const worth = pk.kind === 'heart' ? p.lives < w.rules.lives : p.ability === undefined;
+    if (!worth) continue;
     const d = Math.hypot(pk.pos.x - p.pos.x, pk.pos.y - p.pos.y);
     if (d < bestD) { bestD = d; bestPk = pk.pos; }
   }
-  if (bestPk) {
-    const aim = Math.atan2(bestPk.y - p.pos.y, bestPk.x - p.pos.x);
-    return { steer: turnToward(p.heading, aim), tap: false };
-  }
+  if (bestPk) return { ang: angTo(navPoint(w, p, bestPk) ?? bestPk), tap: false };
 
-  // idle on a plateau? amble toward the stairs so you don't get marooned
-  if (cellAt(w.island, p.pos.x, p.pos.y) === 2 && w.tick % 3 === 0) {
-    const stair = nearestStair(w.island, p.pos);
-    if (stair) return { steer: turnToward(p.heading, Math.atan2(stair.y - p.pos.y, stair.x - p.pos.x)), tap: false };
+  // Stranded on a level with nobody else on it? The bomb can't change hands
+  // across a cliff, so the match stalls — go find the stairs and rejoin.
+  const myLevel = cellAt(w.island, p.pos.x, p.pos.y);
+  if (myLevel >= 1 && !isStairAt(w.island, p.pos.x, p.pos.y)) {
+    const alone = !w.penguins.some((q) =>
+      q.alive && q.slot !== p.slot && cellAt(w.island, q.pos.x, q.pos.y) === myLevel);
+    if (alone) {
+      const stair = nearestStair(w.island, p.pos);
+      if (stair) return { ang: angTo(stair), tap: false };
+    }
   }
-  return { steer: wander(w, p), tap: false };
+  return { ang: p.heading + wander(w, p), tap: false };
+}
+
+export function botInputs(w: World, p: Penguin): { steer: number; tap: boolean; throttle?: number } {
+  const want = intent(w, p);
+  const safe = safeSteer(w, p, want.ang);
+  // Safety shapes movement only. Gating taps on it once looked tidy and
+  // quietly stopped carriers ever throwing near a shoreline.
+  return { steer: safe.steer, tap: want.tap, throttle: safe.throttle };
 }
 
 /**
@@ -100,32 +123,87 @@ function navPoint(w: World, p: Penguin, target: { x: number; y: number }): { x: 
   return nearestStair(w.island, p.pos);
 }
 
-/** Hard override when the path ahead is water or a cliff; undefined when safe. */
-function edgeAvoid(w: World, p: Penguin): number | undefined {
+// px between ray samples. This has to be small relative to a 64px tile AND
+// start close to the body: a bot standing 56px into its tile used to have its
+// first sample land 16px away — already in the NEXT tile — so the water cell
+// it was about to enter half a pixel later was never seen. That single blind
+// spot was most of the falls.
+const PROBE_STEP = 8;
+
+/** How far the bot can travel along `ang` before hitting water or a cliff. */
+function clearRun(w: World, p: Penguin, ang: number, maxDist: number): number {
+  for (let d = PROBE_STEP; d <= maxDist; d += PROBE_STEP) {
+    const q = { x: p.pos.x + Math.cos(ang) * d, y: p.pos.y + Math.sin(ang) * d };
+    if (!isGround(w.island, q) || !canStep(w.island, p.pos, q)) return d - PROBE_STEP;
+  }
+  return maxDist;
+}
+
+const SHORE_CLEARANCE = 46; // px of daylight a bot tries to keep from water
+
+/**
+ * Direction pointing away from nearby water, or undefined when the bot has
+ * room on all sides.
+ *
+ * Ray casting alone is not enough: a bot walking along a shore has water
+ * BESIDE it, never ahead, so every forward probe reads clear right up until
+ * a stray pixel of drift drops it in. Most falls looked exactly like that.
+ */
+function shorePush(w: World, p: Penguin): number | undefined {
+  let rx = 0;
+  let ry = 0;
+  let hits = 0;
+  for (let k = 0; k < 8; k++) {
+    const a = (k * Math.PI) / 4;
+    const q = { x: p.pos.x + Math.cos(a) * SHORE_CLEARANCE, y: p.pos.y + Math.sin(a) * SHORE_CLEARANCE };
+    if (!isGround(w.island, q)) { rx -= Math.cos(a); ry -= Math.sin(a); hits++; }
+  }
+  return hits ? Math.atan2(ry, rx) : undefined;
+}
+
+/**
+ * Bend `desired` around water and cliffs. `throttle` is undefined when the
+ * bot is free to run at full speed — callers use that to tell "cruising" from
+ * "recovering", so it must stay undefined on the safe path.
+ */
+function safeSteer(
+  w: World, p: Penguin, desired: number,
+): { steer: number; throttle?: number } {
   const speed = Math.hypot(p.vel.x, p.vel.y);
-  const lookAhead = 70 + speed * 0.45;
-  const probe = (ang: number, dist: number) => ({
-    x: p.pos.x + Math.cos(ang) * dist,
-    y: p.pos.y + Math.sin(ang) * dist,
-  });
-  const aheadWater = !isGround(w.island, probe(p.heading, lookAhead))
-    || !isGround(w.island, probe(p.heading, lookAhead * 0.5));
-  if (aheadWater) {
-    // pick the side with more ice under it
-    const leftOk = isGround(w.island, probe(p.heading - 0.7, lookAhead));
-    const rightOk = isGround(w.island, probe(p.heading + 0.7, lookAhead));
-    if (leftOk && !rightOk) return -1;
-    if (rightOk && !leftOk) return 1;
+  // Momentum carries past the point where you let go, so plan around where
+  // the bot can actually stop, not where it currently is.
+  const stopDist = speed / Math.max(TUNE.ICE_GRIP, 0.5) + TUNE.PENGUIN_RADIUS;
+  const lookAhead = Math.max(110, stopDist * 2.2);
+  // Ice makes velocity lag heading, so where the FEET point and where the
+  // body SLIDES are different directions — water in either one is trouble.
+  const slideAng = speed > 20 ? Math.atan2(p.vel.y, p.vel.x) : p.heading;
+
+  const wantRun = clearRun(w, p, desired, lookAhead);
+  const slideRun = clearRun(w, p, slideAng, lookAhead);
+  const push = shorePush(w, p);
+  if (wantRun >= lookAhead && slideRun >= lookAhead && push === undefined) {
+    return { steer: turnToward(p.heading, desired) };
+  }
+
+  // Sweep around the DESIRED direction, not the current heading: the bot
+  // should still be going where it wanted, just along a safe line.
+  let bestAng = desired;
+  let bestScore = -Infinity;
+  for (let k = -8; k <= 8; k++) {
+    const ang = desired + (k * Math.PI) / 8;
+    const run = clearRun(w, p, ang, lookAhead);
+    const away = push === undefined ? 0 : Math.cos(ang - push) * 55;
+    const keepGoal = Math.cos(ang - desired) * 45; // give up as little as possible
+    if (run + away + keepGoal > bestScore) { bestScore = run + away + keepGoal; bestAng = ang; }
+  }
+  // Marooned on a shard with nowhere clear: aim at the arena centre and stop.
+  if (bestScore <= 0) {
     const toCenter = Math.atan2(ARENA_H / 2 - p.pos.y, ARENA_W / 2 - p.pos.x);
-    return turnToward(p.heading, toCenter);
+    return { steer: turnToward(p.heading, toCenter), throttle: 0 };
   }
-  // cliff face dead ahead? veer toward the stairs instead of grinding on it
-  if (!canStep(w.island, p.pos, probe(p.heading, 40))) {
-    const stair = nearestStair(w.island, p.pos);
-    const goal = stair ?? { x: ARENA_W / 2, y: ARENA_H / 2 };
-    return turnToward(p.heading, Math.atan2(goal.y - p.pos.y, goal.x - p.pos.x));
-  }
-  return undefined;
+  // Committed to a slide that ends in water? Brake — steering alone won't save
+  // it. Otherwise keep most of the speed so bots stay in the game.
+  return { steer: turnToward(p.heading, bestAng), throttle: slideRun <= stopDist ? 0 : 0.75 };
 }
 
 function wander(w: World, p: Penguin): number {

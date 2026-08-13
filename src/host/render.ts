@@ -7,7 +7,7 @@
 // tumblers) → bomb layer → explosions → clouds → HUD cards.
 
 import { BOMB, fuseFrac } from '../sim/bomb';
-import { ARENA_H, ARENA_W, INVULN_MS, MAX_LIVES } from '../sim/constants';
+import { ARENA_H, ARENA_W, INVULN_MS, MAX_LIVES, TUNE } from '../sim/constants';
 import { TILE, cellAt, cellCenter, cellIndex, groundCells, isGround, type Island } from '../sim/island';
 import type { Penguin, Vec2, World, WorldEvent } from '../sim/world';
 import { DECO_META, PAWN, type Assets } from './assets';
@@ -627,7 +627,7 @@ export class Renderer {
       c.lineWidth = 4;
       c.strokeStyle = `rgba(255, ${Math.round(120 - frac * 90)}, 90, ${0.5 + frac * 0.4})`;
       c.beginPath();
-      c.arc(0, 0, BOMB.PASS_RADIUS, 0, Math.PI * 2);
+      c.arc(0, 0, TUNE.THROW_RADIUS, 0, Math.PI * 2);
       c.stroke();
       c.restore();
       // bomb art is baked into the carry sheets; add only the danger pulse

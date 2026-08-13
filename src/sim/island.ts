@@ -181,15 +181,25 @@ export function nearestStair(i: Island, p: Vec2): Vec2 | undefined {
 
 /**
  * Blast damage: only LOW ground opens to water. Plateaus are indestructible
- * (a crater ringed by cliffs would be an inescapable pit) and stairs are
+ * (a crater ringed by cliffs would be an inescapable pit), stairs are
  * indestructible (destroying the only way down strands people — and farming
- * that would be too strong a strategy).
+ * that would be too strong a strategy), and so is every tile TOUCHING a
+ * stair: blasting the landing at the foot of a staircase would turn the
+ * stairs into a diving board into water.
  */
 export function destroyAt(i: Island, wx: number, wy: number): void {
   const { c, r } = cellOf(wx, wy);
   if (c < 0 || r < 0 || c >= i.cols || r >= i.rows) return;
   const idx = cellIndex(i, c, r);
   if (i.cells[idx] !== 1 || i.stairs.has(idx)) return;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      const nc = c + dc;
+      const nr = r + dr;
+      if (nc < 0 || nr < 0 || nc >= i.cols || nr >= i.rows) continue;
+      if (i.stairs.has(cellIndex(i, nc, nr))) return;
+    }
+  }
   i.cells[idx] = 0;
   i.version++;
 }

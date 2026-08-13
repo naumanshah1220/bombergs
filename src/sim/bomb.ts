@@ -16,7 +16,7 @@ export const BOMB = {
   FUSE_MIN_MS: 12000,   // Dota normal is 15s; we run slightly hotter
   FUSE_MAX_MS: 18000,
   THROW_MS: 500,        // arc flight time
-  PASS_RADIUS: 105,     // throw range (ring shown on the ground)
+  // throw range lives in TUNE.THROW_RADIUS (live-tunable, ring on the ground)
   BLAST_RADIUS: 82,     // costs a life this close to the boom
   NO_TAGBACK_MS: 1500,  // fresh carrier can't return to sender
 };
@@ -61,13 +61,13 @@ export function bombPos(w: World): Vec2 | undefined {
   return undefined;
 }
 
-/** Carrier tap: throw at the nearest target inside PASS_RADIUS. */
+/** Carrier tap: throw at the nearest target inside TUNE.THROW_RADIUS. */
 export function tryThrow(w: World): boolean {
   const b = w.bomb;
   if (b.s !== 'carried') return false;
   const me = w.penguins.find((q) => q.slot === b.slot);
   if (!me) return false;
-  const target = nearestTarget(w, me, b.noTagBackMs > 0 ? b.prevSlot : undefined, BOMB.PASS_RADIUS);
+  const target = nearestTarget(w, me, b.noTagBackMs > 0 ? b.prevSlot : undefined, TUNE.THROW_RADIUS);
   if (!target) return false;
   w.bomb = {
     s: 'flying',

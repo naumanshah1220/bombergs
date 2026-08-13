@@ -15,7 +15,12 @@ function playStage(seed: number): { events: WorldEvent[]; ms: number; survivors:
   );
   const events: WorldEvent[] = [];
   let ms = 0;
-  const LIMIT = 5 * 60 * 1000;
+  // Guards against STALLS, not slowness. Once bots learned to keep off the
+  // shoreline, drowning stopped being a major attrition source and matches
+  // lengthened to ~4-5 minutes, brushing the old 5-minute ceiling. Measured
+  // finishes sit at 220-300s, so this leaves real headroom while still
+  // failing loudly if the bomb loop ever deadlocks.
+  const LIMIT = 8 * 60 * 1000;
   while (ms < LIMIT) {
     events.push(...step(w, 16));
     ms += 16;
@@ -30,7 +35,7 @@ describe('bot soak', () => {
     for (const seed of [1, 42, 777]) {
       const { events, ms, survivors } = playStage(seed);
       expect(survivors).toBeLessThanOrEqual(1);
-      expect(ms).toBeLessThan(5 * 60 * 1000);
+      expect(ms).toBeLessThan(8 * 60 * 1000);
       explosions += events.filter((e) => e.kind === 'explode').length;
       expect(events.some((e) => e.kind === 'stick')).toBe(true);
       // physics stayed finite

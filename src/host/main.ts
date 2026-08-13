@@ -199,24 +199,27 @@ const BOT_NAMES = ['Bot Grubb', 'Bot Snout', 'Bot Wick'];
 function mountTunePanel(force = false): void {
   if (!force && new URLSearchParams(location.search).get('tune') !== '1') return;
   if (document.getElementById('tune')) return;
-  const ranges: Record<keyof Tunables, [number, number]> = {
-    BASE_SPEED: [60, 400],
-    CARRIER_SPEED_MULT: [1, 2],
-    TURN_RATE: [1, 8],
-    ICE_GRIP: [1, 12],
-    PENGUIN_RADIUS: [10, 40],
-    BOT_SPEED_MULT: [0.4, 1.2],
-    STICK_GRIP_MULT: [1, 3],
+  // [min, max, friendly name, what it actually does]
+  const sliders: Record<keyof Tunables, [number, number, string, string]> = {
+    BASE_SPEED: [60, 400, 'Walk speed', 'px per second at full stick'],
+    CARRIER_SPEED_MULT: [1, 2, 'Carrier boost', 'bomb carrier speed multiplier'],
+    THROW_RADIUS: [70, 300, 'Throw range', 'size of the carrier’s throw ring'],
+    ICE_GRIP: [1, 12, 'Traction', 'how fast feet win over sliding — low = ice rink, high = grippy'],
+    STICK_GRIP_MULT: [1, 3, 'Joystick response', 'extra grip for joystick players — high = snappy, low = drifty'],
+    TURN_RATE: [1, 8, 'Bot turn rate', 'how sharply bots can steer'],
+    BOT_SPEED_MULT: [0.4, 1.2, 'Bot speed', 'bot speed vs. humans (1 = equal)'],
+    PENGUIN_RADIUS: [10, 40, 'Body size', 'collision radius in px'],
   };
   const wrap = document.createElement('div');
   wrap.id = 'tune';
-  wrap.style.cssText = `position:fixed;top:10px;right:10px;z-index:50;background:rgba(6,10,30,.9);
-    padding:14px;border-radius:12px;font-size:12px;display:flex;flex-direction:column;gap:6px;width:230px`;
-  for (const key of Object.keys(ranges) as (keyof Tunables)[]) {
-    const [min, max] = ranges[key];
+  wrap.style.cssText = `position:fixed;top:10px;right:10px;z-index:50;background:rgba(6,10,30,.92);
+    padding:14px;border-radius:12px;font-size:12px;display:flex;flex-direction:column;gap:8px;width:250px`;
+  for (const key of Object.keys(sliders) as (keyof Tunables)[]) {
+    const [min, max, label, blurb] = sliders[key];
     const row = document.createElement('label');
-    row.innerHTML = `<span style="display:flex;justify-content:space-between">
-      <b>${key}</b><span id="tv-${key}">${TUNE[key]}</span></span>`;
+    row.innerHTML = `<span style="display:flex;justify-content:space-between;align-items:baseline">
+      <b>${label}</b><span id="tv-${key}" style="font-variant-numeric:tabular-nums">${TUNE[key]}</span></span>
+      <span style="display:block;opacity:.45;font-size:10px;line-height:1.3">${blurb}</span>`;
     const input = document.createElement('input');
     input.type = 'range';
     input.min = String(min);
@@ -233,7 +236,7 @@ function mountTunePanel(force = false): void {
   }
   const note = document.createElement('div');
   note.style.cssText = 'opacity:.5;margin-top:4px';
-  note.textContent = 'physics apply live';
+  note.textContent = 'applies live · T toggles this panel';
   wrap.appendChild(note);
   document.body.appendChild(wrap);
 }
