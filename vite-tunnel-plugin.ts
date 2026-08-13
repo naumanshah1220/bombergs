@@ -30,8 +30,10 @@ export function cloudflareTunnel(): Plugin {
         res.end(JSON.stringify({ url: url ?? null, error: failure ?? null }));
       });
 
-      if (process.env.NO_TUNNEL === '1') {
-        failure = 'disabled by NO_TUNNEL=1';
+      // Vitest builds a serve-mode server too; spawning a tunnel there would
+      // publish nothing useful and keep the test process alive forever.
+      if (process.env.NO_TUNNEL === '1' || process.env.VITEST) {
+        failure = 'disabled';
         return;
       }
 
