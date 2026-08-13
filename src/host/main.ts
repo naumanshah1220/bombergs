@@ -59,10 +59,26 @@ function boot(): void {
 type JoinTarget = { label: string; origin: string; hint: string; here?: boolean };
 
 const HINTS: Record<string, string> = {
-  Tailscale: 'works on ANY network — switch Tailscale ON on the phone',
+  Tunnel: 'HTTPS, works on any network — the reliable one for phones',
+  Tailscale: 'switch Tailscale ON on the phone (plain HTTP, so phone browsers restrict it)',
   'PC hotspot': 'connect the phone to this PC’s hotspot first',
-  Tunnel: 'public URL — works anywhere, but the game link still needs the phone on this Wi-Fi',
 };
+
+/**
+ * The dev server's live Cloudflare tunnel, or undefined when it isn't up.
+ * Fetched fresh every lobby render: quick tunnels get a new random hostname on
+ * every restart, so a remembered one is always a dead link.
+ */
+let tunnelUrl: string | undefined;
+
+async function refreshTunnelUrl(): Promise<void> {
+  try {
+    const res = await fetch('/__tunnel');
+    tunnelUrl = ((await res.json()) as { url: string | null }).url ?? undefined;
+  } catch {
+    tunnelUrl = undefined; // production build, or the endpoint isn't there
+  }
+}
 
 /**
  * Every origin a phone could join through, best first. Which one works depends
@@ -72,6 +88,9 @@ const HINTS: Record<string, string> = {
 function joinTargets(): JoinTarget[] {
   const port = location.port ? `:${location.port}` : '';
   const out: JoinTarget[] = [];
+  // Listed first because it is the only option that is both HTTPS and
+  // firewall-independent, which is what phones actually need.
+  if (tunnelUrl) out.push({ label: 'Tunnel', origin: tunnelUrl, hint: HINTS.Tunnel });
   for (const { label, host } of typeof __NET_HOSTS__ === 'undefined' ? [] : __NET_HOSTS__) {
     out.push({
       label,
@@ -84,12 +103,13 @@ function joinTargets(): JoinTarget[] {
   // of the interface addresses above — otherwise a generic "This page" would
   // shadow the far more useful "Tailscale" / "Wi-Fi" name for the same URL.
   const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  if (!local && !out.some((t) => t.here)) {
+  const onOrigin = out.find((t) => t.origin === location.origin);
+  if (onOrigin) onOrigin.here = true;
+  else if (!local) {
     out.unshift({
-      label: location.hostname.endsWith('.trycloudflare.com') ? 'Tunnel' : 'This page',
+      label: 'This page',
       origin: location.origin,
-      hint: HINTS[location.hostname.endsWith('.trycloudflare.com') ? 'Tunnel' : 'This page']
-        ?? 'the address this page is already open on',
+      hint: 'the address this page is already open on',
       here: true,
     });
   }
@@ -97,7 +117,10 @@ function joinTargets(): JoinTarget[] {
   return out;
 }
 
-const JOIN_PREF_KEY = 'bombergs-join-label';
+// Key is versioned: everyone who had picked a LAN address before the tunnel
+// existed would otherwise stay pinned to it, which is the option most likely
+// to be firewall-blocked.
+const JOIN_PREF_KEY = 'bombergs-join-label-v2';
 
 function pickJoinTarget(): JoinTarget {
   const targets = joinTargets();
@@ -107,10 +130,12 @@ function pickJoinTarget(): JoinTarget {
 
 async function renderLobby(): Promise<void> {
   if (!room || mode !== 'lobby') return;
+  await refreshTunnelUrl();
   const targets = joinTargets();
   const active = pickJoinTarget();
   const join = controllerUrl(active.origin, room.code);
-  const insecure = location.protocol === 'http:';
+  // What matters is the origin the PHONE loads, not the one this screen is on.
+  const insecure = !active.origin.startsWith('https:');
   app.innerHTML = `
     <div style="display:flex;height:100%;align-items:center;justify-content:center;gap:70px;padding:40px">
       <div style="text-align:center">

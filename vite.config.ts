@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { resolve } from 'node:path';
 import { networkInterfaces } from 'node:os';
+import { cloudflareTunnel } from './vite-tunnel-plugin';
 
 type NetHost = { label: string; host: string };
 
@@ -45,7 +46,7 @@ function netHosts(): NetHost[] {
 // self-signed). Plain `npm run dev` stays HTTP for desktop/sim work, where
 // localhost already counts as secure.
 export default defineConfig(({ mode }) => ({
-  plugins: mode === 'phone' ? [basicSsl()] : [],
+  plugins: mode === 'phone' ? [basicSsl(), cloudflareTunnel()] : [cloudflareTunnel()],
   define: {
     __LAN_HOST__: JSON.stringify(netHosts().find((h) => h.label !== 'Tailscale')?.host ?? null),
     __NET_HOSTS__: JSON.stringify(netHosts()),
