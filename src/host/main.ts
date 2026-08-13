@@ -56,7 +56,13 @@ function boot(): void {
   );
 }
 
-type JoinTarget = { label: string; origin: string; hint: string };
+type JoinTarget = { label: string; origin: string; hint: string; here?: boolean };
+
+const HINTS: Record<string, string> = {
+  Tailscale: 'works on ANY network — switch Tailscale ON on the phone',
+  'PC hotspot': 'connect the phone to this PC’s hotspot first',
+  Tunnel: 'public URL — works anywhere, but the game link still needs the phone on this Wi-Fi',
+};
 
 /**
  * Every origin a phone could join through, best first. Which one works depends
@@ -64,30 +70,30 @@ type JoinTarget = { label: string; origin: string; hint: string };
  * so the lobby offers all of them rather than betting on one.
  */
 function joinTargets(): JoinTarget[] {
-  const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  const out: JoinTarget[] = [];
-  if (!local) {
-    out.push({
-      label: location.hostname.endsWith('.trycloudflare.com') ? 'Tunnel' : 'This page',
-      origin: location.origin,
-      hint: 'the address this page is already open on',
-    });
-  }
   const port = location.port ? `:${location.port}` : '';
+  const out: JoinTarget[] = [];
   for (const { label, host } of typeof __NET_HOSTS__ === 'undefined' ? [] : __NET_HOSTS__) {
-    const origin = `${location.protocol}//${host}${port}`;
-    if (out.some((t) => t.origin === origin)) continue;
     out.push({
       label,
-      origin,
-      hint: label === 'Tailscale'
-        ? 'works on ANY network — the phone must have Tailscale switched on'
-        : label === 'PC hotspot'
-          ? 'only if the phone is connected to this PC’s hotspot'
-          : 'phone must be on the same Wi-Fi as this PC',
+      origin: `${location.protocol}//${host}${port}`,
+      hint: HINTS[label] ?? 'phone must be on the same Wi-Fi as this PC',
+      here: host === location.hostname,
     });
   }
-  if (!out.length) out.push({ label: 'This page', origin: location.origin, hint: '' });
+  // The page's own origin is only worth listing separately when it is NOT one
+  // of the interface addresses above — otherwise a generic "This page" would
+  // shadow the far more useful "Tailscale" / "Wi-Fi" name for the same URL.
+  const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (!local && !out.some((t) => t.here)) {
+    out.unshift({
+      label: location.hostname.endsWith('.trycloudflare.com') ? 'Tunnel' : 'This page',
+      origin: location.origin,
+      hint: HINTS[location.hostname.endsWith('.trycloudflare.com') ? 'Tunnel' : 'This page']
+        ?? 'the address this page is already open on',
+      here: true,
+    });
+  }
+  if (!out.length) out.push({ label: 'This page', origin: location.origin, hint: '', here: true });
   return out;
 }
 
@@ -116,7 +122,7 @@ async function renderLobby(): Promise<void> {
           ${targets.map((t) => `<button data-label="${t.label}" style="padding:6px 14px;border-radius:999px;font-weight:700;
             cursor:pointer;border:2px solid #29B6F6;font-size:13px;
             background:${t.label === active.label ? '#29B6F6' : 'transparent'};
-            color:${t.label === active.label ? '#04121f' : '#29B6F6'}">${t.label}</button>`).join('')}
+            color:${t.label === active.label ? '#04121f' : '#29B6F6'}">${t.label}${t.here ? ' •' : ''}</button>`).join('')}
         </div>` : ''}
         <div style="opacity:.5;font-size:14px;margin-top:8px">${join}</div>
         ${active.hint ? `<div style="opacity:.4;font-size:12px;margin-top:2px">${active.hint}</div>` : ''}
