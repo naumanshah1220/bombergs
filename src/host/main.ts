@@ -56,21 +56,54 @@ function boot(): void {
   );
 }
 
+type JoinTarget = { label: string; origin: string; hint: string };
+
 /**
- * Origin phones should join through. Opened via localhost in dev? Swap in the
- * machine's LAN IP (injected at build time) so scanning the QR actually works.
+ * Every origin a phone could join through, best first. Which one works depends
+ * on how the phone is connected, and that changes constantly during testing —
+ * so the lobby offers all of them rather than betting on one.
  */
-function joinOrigin(): string {
+function joinTargets(): JoinTarget[] {
   const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  if (local && typeof __LAN_HOST__ === 'string' && __LAN_HOST__) {
-    return `${location.protocol}//${__LAN_HOST__}:${location.port}`;
+  const out: JoinTarget[] = [];
+  if (!local) {
+    out.push({
+      label: location.hostname.endsWith('.trycloudflare.com') ? 'Tunnel' : 'This page',
+      origin: location.origin,
+      hint: 'the address this page is already open on',
+    });
   }
-  return location.origin;
+  const port = location.port ? `:${location.port}` : '';
+  for (const { label, host } of typeof __NET_HOSTS__ === 'undefined' ? [] : __NET_HOSTS__) {
+    const origin = `${location.protocol}//${host}${port}`;
+    if (out.some((t) => t.origin === origin)) continue;
+    out.push({
+      label,
+      origin,
+      hint: label === 'Tailscale'
+        ? 'works on ANY network — the phone must have Tailscale switched on'
+        : label === 'PC hotspot'
+          ? 'only if the phone is connected to this PC’s hotspot'
+          : 'phone must be on the same Wi-Fi as this PC',
+    });
+  }
+  if (!out.length) out.push({ label: 'This page', origin: location.origin, hint: '' });
+  return out;
+}
+
+const JOIN_PREF_KEY = 'bombergs-join-label';
+
+function pickJoinTarget(): JoinTarget {
+  const targets = joinTargets();
+  const saved = localStorage.getItem(JOIN_PREF_KEY);
+  return targets.find((t) => t.label === saved) ?? targets[0];
 }
 
 async function renderLobby(): Promise<void> {
   if (!room || mode !== 'lobby') return;
-  const join = controllerUrl(joinOrigin(), room.code);
+  const targets = joinTargets();
+  const active = pickJoinTarget();
+  const join = controllerUrl(active.origin, room.code);
   const insecure = location.protocol === 'http:';
   app.innerHTML = `
     <div style="display:flex;height:100%;align-items:center;justify-content:center;gap:70px;padding:40px">
@@ -79,7 +112,14 @@ async function renderLobby(): Promise<void> {
         <div style="opacity:.6;margin:6px 0 26px">scan to join the goblins</div>
         <canvas id="qr" style="border-radius:16px"></canvas>
         <div style="font-size:44px;font-weight:800;letter-spacing:14px;margin-top:18px">${room.code}</div>
-        <div style="opacity:.5;font-size:14px;margin-top:6px">${join}</div>
+        ${targets.length > 1 ? `<div id="joinpick" style="display:flex;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap">
+          ${targets.map((t) => `<button data-label="${t.label}" style="padding:6px 14px;border-radius:999px;font-weight:700;
+            cursor:pointer;border:2px solid #29B6F6;font-size:13px;
+            background:${t.label === active.label ? '#29B6F6' : 'transparent'};
+            color:${t.label === active.label ? '#04121f' : '#29B6F6'}">${t.label}</button>`).join('')}
+        </div>` : ''}
+        <div style="opacity:.5;font-size:14px;margin-top:8px">${join}</div>
+        ${active.hint ? `<div style="opacity:.4;font-size:12px;margin-top:2px">${active.hint}</div>` : ''}
         ${insecure ? `<div style="margin-top:14px;padding:10px 16px;border-radius:10px;
             background:#3a2a10;color:#ffb400;font-size:14px;max-width:340px">
             ⚠️ HTTP mode (dev): fine for joystick controls.</div>` : ''}
@@ -102,6 +142,12 @@ async function renderLobby(): Promise<void> {
     </div>`;
   document.getElementById('start')!.addEventListener('click', startMatch);
   document.getElementById('practice')!.addEventListener('click', startPractice);
+  document.getElementById('joinpick')?.addEventListener('click', (e) => {
+    const label = (e.target as HTMLElement).dataset.label;
+    if (!label) return;
+    localStorage.setItem(JOIN_PREF_KEY, label);
+    void renderLobby(); // same room, new QR — phones already joined stay joined
+  });
   const levelSel = document.getElementById('levelsel') as HTMLSelectElement;
   levelSel.innerHTML = '<option value="">🎲 random island</option>'
     + Object.keys(loadLevels()).map((n) => `<option${n === selectedLevel ? ' selected' : ''}>${n}</option>`).join('');
