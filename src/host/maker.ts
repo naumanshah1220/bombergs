@@ -56,7 +56,7 @@ export function startMaker(app: HTMLElement, assets: Assets): void {
         <input id="mfile" type="file" accept=".json" style="display:none"/>
         <button id="mclear" style="width:100%;margin-top:6px;padding:6px;background:#131a3a;color:#eaf6ff;border:1px solid #29B6F6;border-radius:6px">🧹 clear map</button>
         <div style="opacity:.5;margin-top:10px">paint: click/drag · deco: click to place,
-          click again to select · <a href="/" style="color:#29B6F6">back to game</a></div>
+          click again to select · <a href="${import.meta.env.BASE_URL}" style="color:#29B6F6">back to game</a></div>
       </div>
       <div style="flex:1 1 0;min-width:0;position:relative">
         <canvas id="mcanvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>

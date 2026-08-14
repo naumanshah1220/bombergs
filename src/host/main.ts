@@ -175,7 +175,7 @@ async function renderLobby(): Promise<void> {
         <div style="margin-top:14px">
           <select id="levelsel" style="padding:8px;background:#131a3a;color:#eaf6ff;
             border:1px solid #29B6F6;border-radius:8px;min-width:220px"></select>
-          <a href="/?maker=1" style="color:#29B6F6;margin-left:10px">🛠 map maker</a>
+          <a href="${import.meta.env.BASE_URL}?maker=1" style="color:#29B6F6;margin-left:10px">🛠 map maker</a>
         </div>
       </div>
     </div>`;
