@@ -40,6 +40,20 @@ token ever gets pasted anywhere.
 Verified before deploying: `npx wrangler dev --local` runs this Worker with
 no account at all, and the game pairs through it end to end.
 
+**Deployed:** `wss://bombergs-relay.naumanshah1220.workers.dev`
+
+### If the first deploy complains about a workers.dev subdomain
+
+A brand-new Cloudflare account has none, and every Worker URL hangs off it.
+Wrangler tries to claim one automatically using the **directory name it is
+run from** — so deploying from a folder called `server` tries to claim
+`server`, which has been taken for years, and the deploy stops.
+
+Deploying once from a folder named after the subdomain you want claims it.
+(The Worker itself is still named by `wrangler.toml`, not the folder.) The
+error also links to a `/workers/onboarding` dashboard page that does not
+exist; the real one is `/workers/subdomain`.
+
 Wrangler prints a URL like `https://bombergs-relay.<you>.workers.dev`.
 
 Then point the game at it. In the repo: **Settings → Secrets and variables →
