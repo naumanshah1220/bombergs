@@ -28,12 +28,17 @@ nothing deployed.
 Durable Objects give one consistent instance per room, which is exactly the
 routing model here.
 
+Wrangler is already a dev dependency, so from the repo root:
+
 ```bash
-npm install -g wrangler
-wrangler login                 # opens a browser, one time
-cd server
-wrangler deploy
+cd server && npx wrangler login && npx wrangler deploy
 ```
+
+`wrangler login` opens a browser once and stores the credential locally — no
+token ever gets pasted anywhere.
+
+Verified before deploying: `npx wrangler dev --local` runs this Worker with
+no account at all, and the game pairs through it end to end.
 
 Wrangler prints a URL like `https://bombergs-relay.<you>.workers.dev`.
 
