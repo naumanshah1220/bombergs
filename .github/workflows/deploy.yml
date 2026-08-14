@@ -32,6 +32,10 @@ jobs:
         run: npm run build
         env:
           PAGES_BASE: /${{ github.event.repository.name }}/
+          # Optional repo variable. Without it a published build has no relay
+          # and phones must rely on WebRTC, which needs a TURN server that no
+          # longer exists for free — see server/README.md.
+          VITE_RELAY_URL: ${{ vars.VITE_RELAY_URL }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

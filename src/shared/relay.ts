@@ -32,20 +32,31 @@ function makeConn(send: (msg: unknown) => void, close: () => void): RelayConn {
   };
 }
 
+/**
+ * Where the relay lives. In dev it is part of the dev server, on the same
+ * origin. A published build has no server of its own, so it needs an explicit
+ * address supplied at build time via VITE_RELAY_URL.
+ */
+function relayBase(): string | undefined {
+  const configured = import.meta.env.VITE_RELAY_URL as string | undefined;
+  if (configured) return configured.replace(/\/$/, '');
+  if (!import.meta.env.DEV) return undefined;
+  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+}
+
 function relayUrl(params: Record<string, string>): string {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const qs = new URLSearchParams(params).toString();
-  return `${proto}//${location.host}/relay?${qs}`;
+  return `${relayBase()}/relay?${new URLSearchParams(params).toString()}`;
 }
 
 const DIAL_MS = 2500;
 
 /**
- * The relay is part of the dev server, so a static build (itch.io, GitHub
- * Pages) has none. Skipping the dial there sends both ends straight to
- * PeerJS instead of staring at a doomed socket for 2.5s first.
+ * Without a relay both ends fall back to WebRTC, which needs a TURN server to
+ * cross networks — and as of Aug 2026 neither PeerJS's bundled relays nor the
+ * public Open Relay ones return any relay candidates at all. So on a static
+ * host WITHOUT VITE_RELAY_URL set, phones frequently cannot connect.
  */
-export const relayAvailable = (): boolean => import.meta.env.DEV;
+export const relayAvailable = (): boolean => relayBase() !== undefined;
 
 /**
  * Host end. Resolves once the relay accepts us; rejects (so the caller can

@@ -172,9 +172,13 @@ function connect(): void {
       let iceState = 'new';
       dc.on('iceStateChanged', (s: string) => { iceState = s; });
       const joinTimeout = setTimeout(() => {
-        if (!dc.open) {
-          ui.showError(`Couldn't reach the TV (link state: ${iceState}). Check the room code still shows ${room} on the big screen, then reload.`);
-        }
+        if (dc.open) return;
+        // "checking" means no network route was ever found between phone and
+        // PC. That is not something the player can fix by retrying, so say so
+        // rather than sending them round the reload loop again.
+        ui.showError(iceState === 'checking' || iceState === 'failed'
+          ? `No route to the TV — this network blocks the direct phone↔PC link, and there is no relay configured. (See server/README.md.)`
+          : `Couldn't reach the TV (link state: ${iceState}). Check the big screen still shows ${room}, then reload.`);
       }, 12000);
       dc.on('open', () => { clearTimeout(joinTimeout); attach(dc as unknown as Conn); });
     });
