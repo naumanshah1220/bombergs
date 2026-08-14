@@ -41,11 +41,19 @@ function relayUrl(params: Record<string, string>): string {
 const DIAL_MS = 2500;
 
 /**
+ * The relay is part of the dev server, so a static build (itch.io, GitHub
+ * Pages) has none. Skipping the dial there sends both ends straight to
+ * PeerJS instead of staring at a doomed socket for 2.5s first.
+ */
+export const relayAvailable = (): boolean => import.meta.env.DEV;
+
+/**
  * Host end. Resolves once the relay accepts us; rejects (so the caller can
  * fall back to PeerJS) if there is no relay on this origin.
  */
 export function relayHost(code: string, onConnection: (c: Conn) => void): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (!relayAvailable()) { reject(); return; }
     let ws: WebSocket;
     try { ws = new WebSocket(relayUrl({ room: code, role: 'host' })); } catch { reject(); return; }
     const conns = new Map<string, ReturnType<typeof makeConn>>();
@@ -79,6 +87,7 @@ export function relayHost(code: string, onConnection: (c: Conn) => void): Promis
 /** Controller end. Rejects when this origin has no relay. */
 export function relayController(code: string): Promise<Conn> {
   return new Promise((resolve, reject) => {
+    if (!relayAvailable()) { reject(); return; }
     let ws: WebSocket;
     const id = Math.random().toString(36).slice(2);
     try { ws = new WebSocket(relayUrl({ room: code, role: 'ctrl', id })); } catch { reject(); return; }

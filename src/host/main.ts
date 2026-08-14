@@ -76,11 +76,14 @@ const HINTS: Record<string, string> = {
 let tunnelUrl: string | undefined;
 
 async function refreshTunnelUrl(): Promise<void> {
+  // The endpoint belongs to the dev server; asking for it in a static build
+  // just logs a 404 on someone's portfolio visit.
+  if (!import.meta.env.DEV) { tunnelUrl = undefined; return; }
   try {
     const res = await fetch('/__tunnel');
     tunnelUrl = ((await res.json()) as { url: string | null }).url ?? undefined;
   } catch {
-    tunnelUrl = undefined; // production build, or the endpoint isn't there
+    tunnelUrl = undefined; // tunnel disabled via NO_TUNNEL=1
   }
 }
 
@@ -138,7 +141,7 @@ async function renderLobby(): Promise<void> {
   await refreshTunnelUrl();
   const targets = joinTargets();
   const active = pickJoinTarget();
-  const join = controllerUrl(active.origin, room.code);
+  const join = controllerUrl(active.origin, room.code, import.meta.env.BASE_URL);
   // What matters is the origin the PHONE loads, not the one this screen is on.
   const insecure = !active.origin.startsWith('https:');
   app.innerHTML = `

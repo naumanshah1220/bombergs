@@ -42,6 +42,11 @@ export function hostPeerId(code: string): string {
   return `bombergs-${code.toLowerCase()}`;
 }
 
-export function controllerUrl(origin: string, code: string): string {
-  return `${origin}/controller.html?room=${code}`;
+/**
+ * `base` is the path the app is served under — "/" locally, but "/bombergs/"
+ * on a GitHub Pages project site. Ignoring it produced a QR that 404s.
+ */
+export function controllerUrl(origin: string, code: string, base = '/'): string {
+  const path = `${base.endsWith('/') ? base : `${base}/`}controller.html`;
+  return `${origin}${path}?room=${code}`;
 }

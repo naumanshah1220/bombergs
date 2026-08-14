@@ -46,13 +46,21 @@ function netHosts(): NetHost[] {
 // IP (not localhost) — so real-phone testing uses `npm run dev:phone` (HTTPS,
 // self-signed). Plain `npm run dev` stays HTTP for desktop/sim work, where
 // localhost already counts as secure.
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode, command }) => ({
+  // GitHub Pages serves a project site under /<repo>/. The deploy workflow
+  // sets PAGES_BASE; a custom domain (or itch.io) stays at the root.
+  base: process.env.PAGES_BASE ?? '/',
   plugins: mode === 'phone'
     ? [basicSsl(), relayServer(), cloudflareTunnel()]
     : [relayServer(), cloudflareTunnel()],
   define: {
-    __LAN_HOST__: JSON.stringify(netHosts().find((h) => h.label !== 'Tailscale')?.host ?? null),
-    __NET_HOSTS__: JSON.stringify(netHosts()),
+    // Dev only, deliberately. These are the BUILD machine's addresses: baking
+    // them into a published bundle would leak this PC's LAN and Tailscale IPs
+    // to every visitor, and offer them join links that cannot possibly work.
+    __LAN_HOST__: JSON.stringify(
+      command === 'serve' ? netHosts().find((h) => h.label !== 'Tailscale')?.host ?? null : null,
+    ),
+    __NET_HOSTS__: JSON.stringify(command === 'serve' ? netHosts() : []),
   },
   // allowedHosts: vite rejects unknown Host headers. Tunnel hostnames are
   // random per run, and `tailscale serve` fronts us on <machine>.<tailnet>.ts.net.

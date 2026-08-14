@@ -99,7 +99,10 @@ function load(src: string): Promise<HTMLImageElement> {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`failed to load sprite: ${src}`));
-    img.src = `/sprites/${src}`;
+    // BASE_URL (always trailing-slashed) rather than a leading "/": a GitHub
+    // Pages project site serves the app from /<repo>/, where a root-absolute
+    // sprite path 404s and the whole arena renders blank.
+    img.src = `${import.meta.env.BASE_URL}sprites/${src}`;
   });
 }
 

@@ -41,8 +41,8 @@ describe('bot soak', () => {
       // physics stayed finite
       expect(events.every((e) => !('at' in e) || (Number.isFinite(e.at.x) && Number.isFinite(e.at.y)))).toBe(true);
     }
-    // pickups use Math.random, so single seeds vary — but across three
-    // matches the bomb must have gone off at least once
+    // The sim is fully seeded now (pickups used to draw from Math.random and
+    // made this vary run to run), so this is a reproducible floor.
     expect(explosions).toBeGreaterThanOrEqual(1);
   });
 

@@ -86,6 +86,12 @@ export type World = {
   pickupTimerMs: number;
   nextPickupId: number;
   tick: number;
+  /**
+   * The match's random source. Everything stochastic in the sim must draw
+   * from this, not Math.random, or a seeded test stops being reproducible —
+   * pickup spawns used to bypass it and made the bot soak flaky.
+   */
+  rand: () => number;
 };
 
 export function makeWorld(
@@ -132,7 +138,7 @@ export function makeWorld(
   return {
     penguins, island, deco: level?.deco, skin: level?.skin, bomb: idleBomb(), rules,
     pickups: [], pickupTimerMs: PICKUP_INTERVAL_MS / 2, nextPickupId: 1,
-    tick: 0,
+    tick: 0, rand,
   };
 }
 
@@ -150,7 +156,7 @@ export function loseLife(w: World, p: Penguin, at: Vec2): WorldEvent[] {
 }
 
 /** A random safe ground cell to reappear on. */
-export function respawnPoint(w: World, rand: () => number = Math.random): Vec2 {
+export function respawnPoint(w: World, rand: () => number = w.rand): Vec2 {
   const cells = groundCells(w.island, 1);
   if (!cells.length) return { x: (GRID_COLS * 64) / 2, y: (GRID_ROWS * 64) / 2 };
   const pick = cells[Math.floor(rand() * cells.length)];
@@ -285,7 +291,7 @@ export function step(w: World, dtMs: number): WorldEvent[] {
   const carrier = carrierSlot(w.bomb);
   for (const p of w.penguins) {
     if (p.tap && p.alive && p.slot !== carrier && p.ability) {
-      const used = useAbility(w, p);
+      const used = useAbility(w, p, w.rand);
       if (used.length) {
         events.push(...used);
         p.tap = false;
@@ -295,7 +301,7 @@ export function step(w: World, dtMs: number): WorldEvent[] {
   }
 
   // The bomb machine consumes taps and may cost lives.
-  if (w.rules.bomb) events.push(...bombStep(w, dtMs));
+  if (w.rules.bomb) events.push(...bombStep(w, dtMs, w.rand));
   for (const p of w.penguins) p.tap = false;
 
   // invulnerability windows tick down
@@ -308,8 +314,8 @@ export function step(w: World, dtMs: number): WorldEvent[] {
       w.pickupTimerMs = PICKUP_INTERVAL_MS;
       w.pickups.push({
         id: w.nextPickupId++,
-        kind: Math.random() < 0.3 ? 'heart' : 'crate',
-        pos: respawnPoint(w, Math.random),
+        kind: w.rand() < 0.3 ? 'heart' : 'crate',
+        pos: respawnPoint(w, w.rand),
         bornTick: w.tick,
       });
     }
@@ -322,7 +328,7 @@ export function step(w: World, dtMs: number): WorldEvent[] {
         taker.lives = Math.min(taker.lives + 1, MAX_LIVES);
         events.push({ kind: 'pickup', slot: taker.slot, pkind: 'heart' });
       } else {
-        const id = ABILITY_POOL[Math.floor(Math.random() * ABILITY_POOL.length)];
+        const id = ABILITY_POOL[Math.floor(w.rand() * ABILITY_POOL.length)];
         taker.ability = { id, cooldownMs: 0 };
         events.push({ kind: 'pickup', slot: taker.slot, pkind: 'crate', ability: id });
       }
